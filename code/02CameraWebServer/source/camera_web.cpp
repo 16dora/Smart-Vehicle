@@ -1,18 +1,28 @@
 #include "camera_web.h"
+#if CONFIG_CAMERA_WIFI_STA
+// 只有路由器模式依赖本地凭据；热点固件不需要也不包含路由器密码。
 #include "wifi_credentials.local.h"
+#endif
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_psram.h"
+#include "esp_rom_sys.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "nvs_flash.h"
+#if CONFIG_CAMERA_PERF_TEST
+#include "driver/ledc.h"
+#include "driver/gpio.h"
+#endif
 
 // 本模块日志标签；协议数据使用 HTTP 输出，不与串口日志混合。
 static constexpr char TAG[] = "camera_web";
@@ -68,16 +78,18 @@ esp_err_t CameraWeb::initCamera()
     config.pin_vsync = 25;
     config.pin_href = 23;
     config.pin_pclk = 22;
-    config.xclk_freq_hz = 20000000;
+    // 外部时钟由板级实测选择；20 MHz 在当前板上会导致无线发送长时间停顿。
+    config.xclk_freq_hz = CONFIG_CAMERA_XCLK_FREQ_HZ;
     config.ledc_timer = LEDC_TIMER_0;
     config.ledc_channel = LEDC_CHANNEL_0;
     config.pixel_format = PIXFORMAT_JPEG;
     // 按最大支持分辨率分配缓冲，运行时切换分辨率不会超出初始容量。
     config.frame_size = FRAMESIZE_UXGA;
     config.jpeg_quality = 10;
-    config.fb_count = 2;
+    // 有空闲缓冲时采集；双缓冲允许下一帧采集与上一帧发送重叠，满后等待归还。
+    config.fb_count = m_frameCount;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_LATEST;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     esp_err_t result = esp_camera_init(&config);
     if (result != ESP_OK)
     {
@@ -93,21 +105,62 @@ esp_err_t CameraWeb::initCamera()
         return ESP_ERR_NOT_SUPPORTED;
     }
     if (sensor->set_framesize(sensor, FRAMESIZE_VGA) != 0 ||
-        sensor->set_quality(sensor, 12) != 0)
+        sensor->set_quality(sensor, 12) != 0 || applySensorClock(sensor) != ESP_OK)
     {
         ESP_LOGE(TAG, "initCamera() << result=INITIAL_SETTINGS_FAILED");
         esp_camera_deinit();
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "initCamera() << result=OK sensor=OV2640 resolution=640x480");
+    // 每个缓冲都可能保留初始化 UXGA 阶段的旧帧，逐个丢弃后再开放 HTTP 服务。
+    for (int index = 0; index < m_frameCount; ++index)
+    {
+        camera_fb_t* initial = esp_camera_fb_get();
+        if (initial == nullptr)
+        {
+            ESP_LOGE(TAG, "initCamera() << result=INITIAL_FRAME_TIMEOUT");
+            esp_camera_deinit();
+            return ESP_ERR_TIMEOUT;
+        }
+        esp_camera_fb_return(initial);
+    }
+    ESP_LOGI(TAG, "initCamera() << result=OK sensor=OV2640 resolution=640x480 fb_count=%d grab_mode=when_empty cpu_mhz=%d xclk_hz=%d",
+             m_frameCount, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ, CONFIG_CAMERA_XCLK_FREQ_HZ);
     return ESP_OK;
+}
+
+// 输入：传感器；输出：设置结果；作用：使用芯片内部倍频，避免提高板上 GPIO0 时钟。
+esp_err_t CameraWeb::applySensorClock(sensor_t* sensor)
+{
+#if CONFIG_CAMERA_SENSOR_CLK2X
+    // 驱动的 set_framesize 会重写 CLKRC，初始化和后续分辨率切换都必须重新应用。
+    ESP_LOGI(TAG, "sensor set_reg() >> reg=0x111 mask=0x80 value=0x80");
+    const int result = sensor->set_reg(sensor, 0x111, 0x80, 0x80);
+    ESP_LOGI(TAG, "sensor set_reg() << result=%d", result);
+    if (result != 0)
+    {
+        return ESP_FAIL;
+    }
+#endif
+    // 大分辨率沿用驱动的较慢像素时钟，避免高分辨率瞬时数据流超过 DMA 搬运余量。
+    const int divider = sensor->status.framesize > FRAMESIZE_SVGA && CONFIG_CAMERA_DVP_DIV < 12 ?
+        12 : CONFIG_CAMERA_DVP_DIV;
+    ESP_LOGI(TAG, "sensor set_reg() >> reg=0x0d3 mask=0x7f divider=%d", divider);
+    const int dvpResult = sensor->set_reg(sensor, 0xd3, 0x7f, divider);
+    ESP_LOGI(TAG, "sensor set_reg() << result=%d", dvpResult);
+    return dvpResult == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t CameraWeb::initWifi()
 {
+#if CONFIG_CAMERA_WIFI_AP
+    ESP_LOGI(TAG, "initWifi() >> mode=AP ssid=%s", CONFIG_CAMERA_AP_SSID);
+    static_assert(sizeof(CONFIG_CAMERA_AP_SSID) > 1 && sizeof(CONFIG_CAMERA_AP_SSID) <= 33);
+    static_assert(sizeof(CONFIG_CAMERA_AP_PASSWORD) >= 9 && sizeof(CONFIG_CAMERA_AP_PASSWORD) <= 64);
+#else
     ESP_LOGI(TAG, "initWifi() >> ssid=%s", WIFI_SSID);
     static_assert(sizeof(WIFI_SSID) - 1 <= 32);
     static_assert(sizeof(WIFI_PASSWORD) - 1 <= 64);
+#endif
     esp_err_t result = nvs_flash_init();
     if (result == ESP_ERR_NVS_NO_FREE_PAGES || result == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
@@ -118,14 +171,47 @@ esp_err_t CameraWeb::initWifi()
     ESP_RETURN_ON_ERROR(result, TAG, "nvs init failed");
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif init failed");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop failed");
-    if (esp_netif_create_default_wifi_sta() == nullptr)
+#if CONFIG_CAMERA_WIFI_AP
+    esp_netif_t* netif = esp_netif_create_default_wifi_ap();
+#else
+    esp_netif_t* netif = esp_netif_create_default_wifi_sta();
+#endif
+    if (netif == nullptr)
     {
         return ESP_ERR_NO_MEM;
     }
     const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_LOGI(TAG, "Wi-Fi TX config type=%d static_buffers=%d tcp_snd_buf=%d",
+             init.tx_buf_type, init.static_tx_buf_num, CONFIG_LWIP_TCP_SND_BUF_DEFAULT);
     ESP_RETURN_ON_ERROR(esp_wifi_init(&init), TAG, "wifi init failed");
-    // 凭据仅由本地头文件提供，避免写入 Wi-Fi 配置的 NVS 副本或日志。
+    // 两种模式均使用内存配置，不把密码写入 Wi-Fi 配置的 NVS 副本或日志。
     ESP_RETURN_ON_ERROR(esp_wifi_set_storage(WIFI_STORAGE_RAM), TAG, "wifi storage failed");
+    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(
+        WIFI_EVENT, ESP_EVENT_ANY_ID, onWifiEvent, this, &m_wifiEvent), TAG, "wifi event failed");
+    wifi_config_t config = {};
+#if CONFIG_CAMERA_WIFI_AP
+    // 设置固定地址前显式停止 DHCP；地址更新后重新启用，热点启动时分配客户端地址。
+    // 即使 DHCP 尚未运行，ESP-NETIF 也要求它处于 STOPPED 状态才允许设置 IP。
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_stop(netif), TAG, "AP DHCP stop failed");
+    esp_netif_ip_info_t ip = {};
+    ip.ip.addr = ESP_IP4TOADDR(192, 168, 4, 1);
+    ip.gw.addr = ip.ip.addr;
+    ip.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
+    ESP_RETURN_ON_ERROR(esp_netif_set_ip_info(netif, &ip), TAG, "AP address failed");
+    ESP_RETURN_ON_ERROR(esp_netif_dhcps_start(netif), TAG, "AP DHCP start failed");
+    std::memcpy(config.ap.ssid, CONFIG_CAMERA_AP_SSID, sizeof(CONFIG_CAMERA_AP_SSID) - 1);
+    config.ap.ssid_len = sizeof(CONFIG_CAMERA_AP_SSID) - 1;
+    std::memcpy(config.ap.password, CONFIG_CAMERA_AP_PASSWORD, sizeof(CONFIG_CAMERA_AP_PASSWORD) - 1);
+    config.ap.channel = 6;
+    config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    // 允许手机和电脑接入；视频服务仍只支持一个预览连接。
+    config.ap.max_connection = 2;
+    config.ap.pmf_cfg.required = false;
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "AP mode failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &config), TAG, "AP config failed");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "AP start failed");
+#else
+    // 保留原有 STA 连接及三秒重试逻辑，AP 分支不创建此定时器。
     const esp_timer_create_args_t timer = {
         .callback = reconnectWifi,
         .arg = this,
@@ -135,10 +221,7 @@ esp_err_t CameraWeb::initWifi()
     };
     ESP_RETURN_ON_ERROR(esp_timer_create(&timer, &m_retryTimer), TAG, "retry timer failed");
     ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(
-        WIFI_EVENT, ESP_EVENT_ANY_ID, onWifiEvent, this, &m_wifiEvent), TAG, "wifi event failed");
-    ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, onWifiEvent, this, &m_ipEvent), TAG, "ip event failed");
-    wifi_config_t config = {};
     std::memcpy(config.sta.ssid, WIFI_SSID, sizeof(WIFI_SSID) - 1);
     std::memcpy(config.sta.password, WIFI_PASSWORD, sizeof(WIFI_PASSWORD) - 1);
     config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
@@ -147,15 +230,85 @@ esp_err_t CameraWeb::initWifi()
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "wifi mode failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &config), TAG, "wifi config failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start failed");
-    // 禁用 Wi-Fi 省电以减少视频传输中的间歇延迟。
-    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "wifi power mode failed");
+#endif
+    // 两种接入方式均显式关闭调制解调器省电，并回读状态，避免仅依赖默认策略。
+    ESP_LOGI(TAG, "esp_wifi_set_ps() >> type=WIFI_PS_NONE");
+    result = esp_wifi_set_ps(WIFI_PS_NONE);
+    ESP_LOGI(TAG, "esp_wifi_set_ps() << result=%s", esp_err_to_name(result));
+    ESP_RETURN_ON_ERROR(result, TAG, "wifi power mode failed");
+    wifi_ps_type_t powerSave = WIFI_PS_MIN_MODEM;
+    ESP_LOGI(TAG, "esp_wifi_get_ps() >>");
+    result = esp_wifi_get_ps(&powerSave);
+    ESP_LOGI(TAG, "esp_wifi_get_ps() << result=%s type=%d", esp_err_to_name(result), int(powerSave));
+    ESP_RETURN_ON_ERROR(result, TAG, "wifi power mode readback failed");
+    if (powerSave != WIFI_PS_NONE)
+    {
+        ESP_LOGE(TAG, "initWifi() << result=POWER_SAVE_NOT_DISABLED");
+        return ESP_FAIL;
+    }
+    // SDK 参数单位为 0.25 dBm，80 表示 20 dBm 的发送功率上限；逐包功率仍受 PHY 约束。
+    ESP_LOGI(TAG, "esp_wifi_set_max_tx_power() >> quarter_dbm=80");
+    result = esp_wifi_set_max_tx_power(80);
+    ESP_LOGI(TAG, "esp_wifi_set_max_tx_power() << result=%s", esp_err_to_name(result));
+    ESP_RETURN_ON_ERROR(result, TAG, "wifi tx power failed");
+    int8_t txPower = 0;
+    ESP_LOGI(TAG, "esp_wifi_get_max_tx_power() >>");
+    result = esp_wifi_get_max_tx_power(&txPower);
+    ESP_LOGI(TAG, "esp_wifi_get_max_tx_power() << result=%s quarter_dbm=%d",
+             esp_err_to_name(result), int(txPower));
+    ESP_RETURN_ON_ERROR(result, TAG, "wifi tx power readback failed");
+    ESP_LOGI(TAG, "power settings cpu_mhz=%u wifi_ps=%d max_tx_quarter_dbm=%d",
+             unsigned(esp_rom_get_cpu_ticks_per_us()), int(powerSave), int(txPower));
+#if CONFIG_CAMERA_WIFI_AP
+    ESP_LOGI(TAG, "initWifi() << result=OK mode=AP");
+#else
     ESP_LOGI(TAG, "initWifi() << result=OK waiting_for_ip");
+#endif
     return ESP_OK;
 }
 
 void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* data)
 {
     auto* app = static_cast<CameraWeb*>(arg);
+#if CONFIG_CAMERA_WIFI_AP
+    if (base != WIFI_EVENT)
+    {
+        return;
+    }
+    if (id == WIFI_EVENT_AP_START)
+    {
+        // AP 启动即表示网络接口就绪，不等待 STA 模式才会收到的 GOT_IP 事件。
+        app->m_connected.store(true);
+        ESP_LOGI(TAG, "SoftAP started ssid=%s; open http://192.168.4.1/", CONFIG_CAMERA_AP_SSID);
+    }
+    else if (id == WIFI_EVENT_AP_STOP)
+    {
+        app->m_connected.store(false);
+        app->m_epoch.fetch_add(1);
+        ESP_LOGW(TAG, "SoftAP stopped");
+    }
+    else if (id == WIFI_EVENT_AP_STACONNECTED)
+    {
+        const auto* event = static_cast<wifi_event_ap_staconnected_t*>(data);
+        ESP_LOGI(TAG, "SoftAP client connected aid=%u", event->aid);
+    }
+    else if (id == WIFI_EVENT_AP_STADISCONNECTED)
+    {
+        const auto* event = static_cast<wifi_event_ap_stadisconnected_t*>(data);
+        ESP_LOGI(TAG, "SoftAP client disconnected aid=%u reason=%u", event->aid, event->reason);
+        wifi_sta_list_t clients = {};
+        const esp_err_t result = esp_wifi_ap_get_sta_list(&clients);
+        if (result == ESP_OK && clients.num == 0)
+        {
+            // 最后一个客户端离开后结束旧视频代次，热点本身仍保持可连接。
+            app->m_epoch.fetch_add(1);
+        }
+        else if (result != ESP_OK)
+        {
+            ESP_LOGW(TAG, "AP client list failed result=%s", esp_err_to_name(result));
+        }
+    }
+#else
     if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP)
     {
         app->m_connected.store(true);
@@ -178,6 +331,7 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
         esp_timer_stop(app->m_retryTimer);
         esp_timer_start_once(app->m_retryTimer, 3000000);
     }
+#endif
 }
 
 void CameraWeb::reconnectWifi(void* arg)
@@ -196,15 +350,23 @@ void CameraWeb::reconnectWifi(void* arg)
 
 esp_err_t CameraWeb::startServers()
 {
+    // 两个服务内部占用六个 socket，最多再接收五个客户端连接。
+    static_assert(CONFIG_LWIP_MAX_SOCKETS >= 11, "Two HTTP servers need at least 11 sockets");
     ESP_LOGI(TAG, "startServers() >>");
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.stack_size = 8192;
+#if CONFIG_CAMERA_PERF_TEST
+    config.max_uri_handlers = 6;
+#else
     config.max_uri_handlers = 5;
+#endif
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
     config.send_wait_timeout = 3;
     config.recv_wait_timeout = 3;
+    // 两个服务复用此配置，所有新连接在发送 HTTP 头部之前就完成 TCP 配置。
+    config.open_fn = onSocketOpen;
     ESP_RETURN_ON_ERROR(httpd_start(&m_control, &config), TAG, "control server failed");
     const char* paths[] = {"/", "/status", "/control", "/stop", "/capture"};
     for (const char* path : paths)
@@ -223,6 +385,15 @@ esp_err_t CameraWeb::startServers()
             return result;
         }
     }
+#if CONFIG_CAMERA_PERF_TEST
+    // 测量接口只在专用测试构建中注册，常规固件不暴露停止相机的操作。
+    httpd_uri_t perfUri = {};
+    perfUri.uri = "/perf";
+    perfUri.method = HTTP_GET;
+    perfUri.handler = onRequest;
+    perfUri.user_ctx = this;
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(m_control, &perfUri), TAG, "perf route failed");
+#endif
     // 长时间传输的视频独占另一 HTTP 任务，控制页面仍可响应。
     config.server_port = 81;
     config.ctrl_port += 1;
@@ -249,7 +420,30 @@ esp_err_t CameraWeb::startServers()
         m_control = nullptr;
         return registered;
     }
-    ESP_LOGI(TAG, "startServers() << result=OK control=80 stream=81");
+    ESP_LOGI(TAG, "startServers() << result=OK control=80 stream=81 socket_budget=%d",
+             CONFIG_LWIP_MAX_SOCKETS);
+    return ESP_OK;
+}
+
+esp_err_t CameraWeb::onSocketOpen(httpd_handle_t server, int socketFd)
+{
+    const int enabled = 1;
+    // HTTP 头、分块长度和 MJPEG 边界都是小包；禁用 Nagle，避免等待合并后才发送。
+    if (setsockopt(socketFd, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled)) != 0)
+    {
+        ESP_LOGE(TAG, "onSocketOpen() << result=SET_NODELAY_FAILED socket=%d errno=%d", socketFd, errno);
+        return ESP_FAIL;
+    }
+    int actual = 0;
+    socklen_t length = sizeof(actual);
+    if (getsockopt(socketFd, IPPROTO_TCP, TCP_NODELAY, &actual, &length) != 0 || actual != 1)
+    {
+        // 读取实际状态，不能仅凭设置调用成功就宣称新连接已使用低延迟模式。
+        ESP_LOGE(TAG, "onSocketOpen() << result=VERIFY_NODELAY_FAILED socket=%d errno=%d value=%d",
+                 socketFd, errno, actual);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "onSocketOpen() << result=OK socket=%d tcp_nodelay=%d", socketFd, actual);
     return ESP_OK;
 }
 
@@ -257,6 +451,13 @@ esp_err_t CameraWeb::onRequest(httpd_req_t* req)
 {
     auto* app = static_cast<CameraWeb*>(req->user_ctx);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+#if CONFIG_CAMERA_PERF_TEST
+    if (std::strncmp(req->uri, "/perf", 5) == 0 &&
+        (req->uri[5] == '\0' || req->uri[5] == '?'))
+    {
+        return app->sendPerf(req);
+    }
+#endif
     if (std::strcmp(req->uri, "/") == 0)
     {
         // HTML 随固件编译嵌入，不依赖电脑上的开发服务器或外部 CDN。
@@ -280,23 +481,287 @@ esp_err_t CameraWeb::onRequest(httpd_req_t* req)
     }
     if (std::strcmp(req->uri, "/capture") == 0)
     {
+        const int64_t started = esp_timer_get_time();
+        int64_t lockUs;
         camera_fb_t* frame = nullptr;
         {
             std::lock_guard<std::mutex> lock(app->m_mutex);
+            lockUs = esp_timer_get_time() - started;
+            ESP_LOGI(TAG, "capture esp_camera_fb_get() >>");
             frame = esp_camera_fb_get();
         }
+        const int64_t gotFrame = esp_timer_get_time();
         // 帧缓冲由驱动拥有，使用 RAII 保证发送失败时也归还。
         std::unique_ptr<camera_fb_t, decltype(&esp_camera_fb_return)>
             holder(frame, esp_camera_fb_return);
         if (frame == nullptr)
         {
+            ESP_LOGW(TAG, "capture esp_camera_fb_get() << result=NO_FRAME elapsed_ms=%lld",
+                     (long long)((gotFrame - started) / 1000));
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Capture failed");
         }
+        ESP_LOGI(TAG, "capture esp_camera_fb_get() << bytes=%u capture_ms=%lld lock_ms=%lld",
+                 unsigned(frame->len), (long long)((gotFrame - started - lockUs) / 1000),
+                 (long long)(lockUs / 1000));
         httpd_resp_set_type(req, "image/jpeg");
-        return httpd_resp_send(req, reinterpret_cast<const char*>(frame->buf), frame->len);
+        ESP_LOGI(TAG, "capture httpd_resp_send() >> bytes=%u", unsigned(frame->len));
+        const esp_err_t result = httpd_resp_send(req, reinterpret_cast<const char*>(frame->buf), frame->len);
+        const int sendErrno = errno;
+        ESP_LOGI(TAG, "capture httpd_resp_send() << result=%s errno=%d send_ms=%lld",
+                 esp_err_to_name(result), result == ESP_OK ? 0 : sendErrno,
+                 (long long)((esp_timer_get_time() - gotFrame) / 1000));
+        return result;
     }
     return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
 }
+
+#if CONFIG_CAMERA_PERF_TEST
+// 输入：可选的相机开关查询；输出：固定 64 KiB 数据；作用：隔离采图与 TCP 传输的影响。
+esp_err_t CameraWeb::sendPerf(httpd_req_t* req)
+{
+    ESP_LOGI(TAG, "sendPerf() >> uri=%s", req->uri);
+    char query[64] = {};
+    char mode[12] = {};
+    char clock[12] = {};
+    char channel[8] = {};
+    char frequency[12] = {};
+    char drive[8] = {};
+    char pll[8] = {};
+    char buffers[8] = {};
+    char dvp[8] = {};
+    char sample[8] = {};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "camera", mode, sizeof(mode));
+    httpd_query_key_value(query, "clock", clock, sizeof(clock));
+    httpd_query_key_value(query, "channel", channel, sizeof(channel));
+    httpd_query_key_value(query, "xclk", frequency, sizeof(frequency));
+    httpd_query_key_value(query, "drive", drive, sizeof(drive));
+    httpd_query_key_value(query, "pll", pll, sizeof(pll));
+    httpd_query_key_value(query, "buffers", buffers, sizeof(buffers));
+    httpd_query_key_value(query, "dvp", dvp, sizeof(dvp));
+    httpd_query_key_value(query, "sample", sample, sizeof(sample));
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        // 只允许在没有预览时切换硬件，避免销毁仍由视频发送任务持有的帧。
+        if (m_streaming)
+        {
+            ESP_LOGW(TAG, "sendPerf() << result=STREAM_BUSY");
+            httpd_resp_set_status(req, "409 Conflict");
+            return httpd_resp_sendstr(req, "Stop stream first");
+        }
+        esp_err_t result = ESP_OK;
+        if (buffers[0] != '\0')
+        {
+            // 比较帧缓冲数时完整重建驱动，其他初始化参数使用同一组构建配置。
+            const int count = std::atoi(buffers);
+            if (count != 1 && count != 2)
+            {
+                return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid buffer count");
+            }
+            if (count != m_frameCount)
+            {
+                ESP_LOGI(TAG, "perf rebuild camera >> buffers=%d", count);
+                result = esp_camera_deinit();
+                if (result == ESP_OK)
+                {
+                    m_frameCount = count;
+                    result = initCamera();
+                }
+                ESP_LOGI(TAG, "perf rebuild camera << result=%s", esp_err_to_name(result));
+            }
+        }
+        if (std::strcmp(mode, "off") == 0 && esp_camera_sensor_get() != nullptr)
+        {
+            ESP_LOGI(TAG, "esp_camera_deinit() >>");
+            result = esp_camera_deinit();
+            ESP_LOGI(TAG, "esp_camera_deinit() << result=%s", esp_err_to_name(result));
+        }
+        else if (std::strcmp(mode, "on") == 0 && esp_camera_sensor_get() == nullptr)
+        {
+            result = initCamera();
+        }
+        // 仅暂停时钟不释放驱动、DMA 内存或相机任务，用于排除内存释放带来的干扰。
+        if (result == ESP_OK && esp_camera_sensor_get() != nullptr && clock[0] != '\0')
+        {
+            ESP_LOGI(TAG, "ledc camera clock >> mode=%s", clock);
+            if (std::strcmp(clock, "off") == 0)
+            {
+                result = ledc_timer_pause(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0);
+            }
+            else if (std::strcmp(clock, "on") == 0)
+            {
+                result = ledc_timer_resume(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0);
+            }
+            else
+            {
+                result = ESP_ERR_INVALID_ARG;
+            }
+            ESP_LOGI(TAG, "ledc camera clock << result=%s", esp_err_to_name(result));
+        }
+        if (result == ESP_OK && esp_camera_sensor_get() != nullptr && frequency[0] != '\0')
+        {
+            // 测试频点均在 OV2640 外部时钟范围内，每次只改变一个参数。
+            const int hz = std::atoi(frequency);
+            ESP_LOGI(TAG, "ledc_set_freq() >> hz=%d", hz);
+            result = hz == 8000000 || hz == 10000000 || hz == 16000000 || hz == 20000000 ?
+                ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, hz) : ESP_ERR_INVALID_ARG;
+            ESP_LOGI(TAG, "ledc_set_freq() << result=%s actual_hz=%u", esp_err_to_name(result),
+                     unsigned(ledc_get_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0)));
+        }
+        if (result == ESP_OK && esp_camera_sensor_get() != nullptr && drive[0] != '\0')
+        {
+            // 保持频率与内存不变，只比较 GPIO0 输出驱动强度，测试后恢复默认档位。
+            gpio_drive_cap_t strength = GPIO_DRIVE_CAP_2;
+            if (std::strcmp(drive, "0") == 0)
+            {
+                strength = GPIO_DRIVE_CAP_0;
+            }
+            else if (std::strcmp(drive, "2") != 0)
+            {
+                result = ESP_ERR_INVALID_ARG;
+            }
+            if (result == ESP_OK)
+            {
+                ESP_LOGI(TAG, "gpio_set_drive_capability() >> gpio=0 level=%s", drive);
+                result = gpio_set_drive_capability(GPIO_NUM_0, strength);
+                ESP_LOGI(TAG, "gpio_set_drive_capability() << result=%s", esp_err_to_name(result));
+            }
+        }
+        if (result == ESP_OK && esp_camera_sensor_get() != nullptr && pll[0] != '\0')
+        {
+            // OV2640 的 SENSOR bank CLKRC(0x11) bit7 控制内部倍频，不提高外部 GPIO 时钟。
+            // 使用驱动的带 bank 地址接口，只修改这一位，其他分频位保持原样。
+            sensor_t* sensor = esp_camera_sensor_get();
+            if (std::strcmp(pll, "0") == 0 || std::strcmp(pll, "1") == 0)
+            {
+                ESP_LOGI(TAG, "sensor set_reg() >> reg=0x111 mask=0x80 pll=%s", pll);
+                result = sensor->set_reg(sensor, 0x111, 0x80, pll[0] == '1' ? 0x80 : 0) == 0 ?
+                    ESP_OK : ESP_FAIL;
+                ESP_LOGI(TAG, "sensor set_reg() << result=%s", esp_err_to_name(result));
+            }
+            else
+            {
+                result = ESP_ERR_INVALID_ARG;
+            }
+        }
+        if (result == ESP_OK && esp_camera_sensor_get() != nullptr && dvp[0] != '\0')
+        {
+            // 只比较合法的手动像素时钟分频；保留 R_DVP_SP 的自动分频控制位。
+            const int divider = std::atoi(dvp);
+            if (divider == 2 || divider == 4 || divider == 8 || divider == 12)
+            {
+                ESP_LOGI(TAG, "sensor set_reg() >> reg=0x0d3 mask=0x7f divider=%d", divider);
+                result = esp_camera_sensor_get()->set_reg(esp_camera_sensor_get(), 0xd3, 0x7f, divider) == 0 ?
+                    ESP_OK : ESP_FAIL;
+                ESP_LOGI(TAG, "sensor set_reg() << result=%s", esp_err_to_name(result));
+            }
+            else
+            {
+                result = ESP_ERR_INVALID_ARG;
+            }
+        }
+        if (result != ESP_OK)
+        {
+            ESP_LOGE(TAG, "sendPerf() << result=%s", esp_err_to_name(result));
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera switch failed");
+        }
+        if (sample[0] != '\0')
+        {
+            const int count = std::atoi(sample);
+            if (count < 2 || count > 30 || esp_camera_sensor_get() == nullptr)
+            {
+                return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid sample count");
+            }
+            int captured = 0;
+            int64_t firstUs = 0;
+            int64_t lastUs = 0;
+            // 测量窗口内不发送图像，取帧后立即归还，单独得到采集通路的节拍上限。
+            // 首帧可能已缓存，不把它算作新采样；遇到超时立即退出，最多等待一次驱动超时。
+            for (int index = 0; index < count; ++index)
+            {
+                ESP_LOGI(TAG, "bench esp_camera_fb_get() >> index=%d", index);
+                camera_fb_t* frame = esp_camera_fb_get();
+                const int64_t now = esp_timer_get_time();
+                ESP_LOGI(TAG, "bench esp_camera_fb_get() << index=%d result=%s", index,
+                         frame != nullptr ? "OK" : "NO_FRAME");
+                if (frame == nullptr)
+                {
+                    break;
+                }
+                if (captured == 0)
+                {
+                    firstUs = now;
+                }
+                lastUs = now;
+                ++captured;
+                esp_camera_fb_return(frame);
+            }
+            char json[160];
+            const double fps = captured > 1 && lastUs > firstUs ?
+                (captured - 1) * 1000000.0 / (lastUs - firstUs) : 0;
+            std::snprintf(json, sizeof(json), "{\"captured\":%d,\"fps\":%.3f,\"elapsed_ms\":%lld,\"buffers\":%d}",
+                          captured, fps, (long long)((lastUs - firstUs) / 1000), m_frameCount);
+            ESP_LOGI(TAG, "sendPerf() << %s", json);
+            httpd_resp_set_type(req, "application/json");
+            return httpd_resp_sendstr(req, json);
+        }
+    }
+#if CONFIG_CAMERA_WIFI_AP
+    if (channel[0] != '\0')
+    {
+        // 只调整开发板热点信道，不修改电脑配置；客户端可能需要重新关联热点。
+        const int number = std::atoi(channel);
+        ESP_LOGI(TAG, "esp_wifi_set_channel() >> channel=%d", number);
+        const esp_err_t result = number == 1 || number == 6 || number == 11 ?
+            esp_wifi_set_channel(number, WIFI_SECOND_CHAN_NONE) : ESP_ERR_INVALID_ARG;
+        ESP_LOGI(TAG, "esp_wifi_set_channel() << result=%s", esp_err_to_name(result));
+        if (result != ESP_OK)
+        {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Channel switch failed");
+        }
+    }
+    wifi_sta_list_t clients = {};
+    const esp_err_t listResult = esp_wifi_ap_get_sta_list(&clients);
+    if (listResult == ESP_OK && clients.num > 0)
+    {
+        ESP_LOGI(TAG, "perf AP client rssi_dbm=%d phy_n=%u internal_free=%u",
+                 int(clients.sta[0].rssi), unsigned(clients.sta[0].phy_11n),
+                 unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+    }
+#endif
+    // 不使用图像数据；固定负载在整个发送期间保持有效，结果不受 JPEG 内容影响。
+    std::unique_ptr<char[]> data(new (std::nothrow) char[4096]);
+    if (!data)
+    {
+        ESP_LOGE(TAG, "sendPerf() << result=NO_MEMORY");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No memory");
+    }
+    std::memset(data.get(), 0x5a, 4096);
+    httpd_resp_set_type(req, "application/octet-stream");
+    const int64_t started = esp_timer_get_time();
+    unsigned sentBytes = 0;
+    esp_err_t result = ESP_OK;
+    // 总量固定 64 KiB，任一分块失败立即退出，不用重试掩盖吞吐问题。
+    for (int index = 0; index < 16 && result == ESP_OK; ++index)
+    {
+        result = httpd_resp_send_chunk(req, data.get(), 4096);
+        if (result == ESP_OK)
+        {
+            sentBytes += 4096;
+        }
+    }
+    const int sendErrno = errno;
+    if (result == ESP_OK)
+    {
+        result = httpd_resp_send_chunk(req, nullptr, 0);
+    }
+    ESP_LOGI(TAG, "sendPerf() << result=%s errno=%d queued_bytes=%u send_ms=%lld camera=%s",
+             esp_err_to_name(result), result == ESP_OK ? 0 : sendErrno, sentBytes,
+             (long long)((esp_timer_get_time() - started) / 1000),
+             esp_camera_sensor_get() == nullptr ? "off" : "on");
+    return result;
+}
+#endif
 
 esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
 {
@@ -373,6 +838,7 @@ bool CameraWeb::applySetting(const char* name, int value)
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor == nullptr)
     {
+        // 测量模式可能主动停止相机，拒绝控制请求，避免访问已销毁的传感器对象。
         return false;
     }
     if (std::strcmp(name, "max_fps") == 0)
@@ -398,7 +864,7 @@ bool CameraWeb::applySetting(const char* name, int value)
             case 5: size = FRAMESIZE_UXGA; break;
             default: return false;
         }
-        if (sensor->set_framesize(sensor, size) != 0)
+        if (sensor->set_framesize(sensor, size) != 0 || applySensorClock(sensor) != ESP_OK)
         {
             return false;
         }
@@ -449,10 +915,14 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         httpd_resp_set_status(req, "503 Service Unavailable");
         return httpd_resp_sendstr(req, "Wi-Fi disconnected");
     }
-    ESP_LOGI(TAG, "onStream() >>");
+    ESP_LOGI(TAG, "onStream() >> socket=%d wifi_connected=%d internal_free=%u",
+             httpd_req_to_sockfd(req), int(app->m_connected.load()),
+             unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
     httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=frame");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     unsigned frames = 0;
+    // 记录本次连接完整发出的帧数，区分首帧失败和持续传输后的失败。
+    unsigned totalFrames = 0;
     int64_t window = 0;
     int64_t nextFrame = esp_timer_get_time();
     esp_err_t result = ESP_OK;
@@ -472,38 +942,93 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         const int64_t started = esp_timer_get_time();
         camera_fb_t* frame = nullptr;
         int maxFps;
+        int64_t captureStart;
+        int64_t captureUs;
         {
             std::lock_guard<std::mutex> lock(app->m_mutex);
             maxFps = app->m_maxFps;
             app->m_streaming = true;
+            captureStart = esp_timer_get_time();
             frame = esp_camera_fb_get();
+            captureUs = esp_timer_get_time() - captureStart;
         }
         std::unique_ptr<camera_fb_t, decltype(&esp_camera_fb_return)>
             holder(frame, esp_camera_fb_return);
         if (frame == nullptr || frame->format != PIXFORMAT_JPEG)
         {
-            ESP_LOGE(TAG, "onStream() frame acquisition failed");
+            ESP_LOGE(TAG, "取帧失败 capture_ms=%lld lock_wait_ms=%lld frame_present=%d",
+                     (long long)(captureUs / 1000),
+                     (long long)((captureStart - started) / 1000), int(frame != nullptr));
             result = ESP_FAIL;
             break;
+        }
+        if (totalFrames == 0)
+        {
+            // 首帧记录尺寸和 JPEG 起始标志，后续正常帧不逐帧刷屏。
+            const bool hasSoi = frame->len >= 2 && frame->buf[0] == 0xff && frame->buf[1] == 0xd8;
+            ESP_LOGI(TAG, "首帧已取得 bytes=%u width=%u height=%u jpeg_soi=%d capture_ms=%lld lock_wait_ms=%lld",
+                     unsigned(frame->len), unsigned(frame->width), unsigned(frame->height), int(hasSoi),
+                     (long long)(captureUs / 1000),
+                     (long long)((captureStart - started) / 1000));
         }
         char header[128];
         const int length = std::snprintf(header, sizeof(header),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
             unsigned(frame->len));
         // 网络发送不持有传感器锁，慢速客户端不会阻止网页调节参数。
+        const int64_t sendStart = esp_timer_get_time();
+        const char* stage = "frame_header";
+        errno = 0;
         result = httpd_resp_send_chunk(req, header, length);
         if (result == ESP_OK)
         {
+            stage = "jpeg_data";
             result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(frame->buf), frame->len);
         }
         if (result == ESP_OK)
         {
+            stage = "frame_tail";
             result = httpd_resp_send_chunk(req, "\r\n", 2);
         }
         if (result != ESP_OK)
         {
+            // 必须先保存 errno，再查询无线状态，避免后续接口覆盖原始发送错误。
+            const int sendErrno = errno;
+            const int64_t sendUs = esp_timer_get_time() - sendStart;
+            ESP_LOGW(TAG, "视频发送失败 stage=%s result=%s errno=%d completed_frames=%u bytes=%u send_ms=%lld",
+                     stage, esp_err_to_name(result), sendErrno, totalFrames,
+                     unsigned(frame->len), (long long)(sendUs / 1000));
+#if CONFIG_CAMERA_WIFI_AP
+            // AP 没有上游路由器信号强度；改为记录热点状态及当前接入设备数量。
+            wifi_sta_list_t clients = {};
+            const esp_err_t wifiResult = esp_wifi_ap_get_sta_list(&clients);
+            ESP_LOGW(TAG, "发送失败时 AP ready=%d clients=%d list_result=%s internal_free=%u",
+                     int(app->m_connected.load()), wifiResult == ESP_OK ? clients.num : -1,
+                     esp_err_to_name(wifiResult), unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+#else
+            wifi_ap_record_t access = {};
+            const esp_err_t wifiResult = esp_wifi_sta_get_ap_info(&access);
+            if (wifiResult == ESP_OK)
+            {
+                ESP_LOGW(TAG, "发送失败时 Wi-Fi 仍关联 rssi_dbm=%d internal_free=%u",
+                         access.rssi, unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+            }
+            else
+            {
+                ESP_LOGW(TAG, "发送失败时无法取得 Wi-Fi 状态 result=%s", esp_err_to_name(wifiResult));
+            }
+#endif
             break;
         }
+        // 单缓冲必须在统计状态加锁前归还，避免拍照任务持锁等帧时互相等待。
+        // 此处之后不再读取 frame，防止缓冲被后续采集覆盖时仍访问旧内容。
+        holder.reset();
+        if (totalFrames == 0)
+        {
+            ESP_LOGI(TAG, "首帧发送完成 send_ms=%lld",
+                     (long long)((esp_timer_get_time() - sendStart) / 1000));
+        }
+        ++totalFrames;
         const int64_t now = esp_timer_get_time();
         if (window == 0)
         {
@@ -533,6 +1058,7 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             result = httpd_resp_send_chunk(req, nullptr, 0);
         }
     }
-    ESP_LOGI(TAG, "onStream() << result=%s", esp_err_to_name(result));
+    ESP_LOGI(TAG, "onStream() << result=%s completed_frames=%u",
+             esp_err_to_name(result), totalFrames);
     return result;
 }

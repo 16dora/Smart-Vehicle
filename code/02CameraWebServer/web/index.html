@@ -78,6 +78,8 @@ const settings = document.getElementById('settings');
 let initialized = false;
 // 正在提交设置时暂停状态轮询，避免旧响应覆盖刚提交的新数值。
 let saving = false;
+// 同时只允许一个状态请求，设备响应慢时不继续堆积浏览器连接。
+let polling = false;
 // 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
 let previewing = false;
 
@@ -103,19 +105,54 @@ function updateValue(event) {
   if (output) output.value = event.target.value;
 }
 
-// 输入：请求路径和选项；输出：响应；作用：断网或服务忙时五秒超时。
-async function request(path, options = {}) {
-  const response = await fetch(path, {...options, signal: AbortSignal.timeout(5000)});
-  if (!response.ok) throw new Error(await response.text());
-  return response;
+// 输入：错误类型和说明；输出：错误对象；作用：避免把所有失败都描述为 Wi-Fi 断开。
+function requestError(kind, message) {
+  const error = new Error(message);
+  error.kind = kind;
+  return error;
+}
+
+// 输入：错误对象；输出：可读说明；作用：区分超时、HTTP 错误、数据错误和网络错误。
+function describeError(error) {
+  if (error.kind === 'timeout') return '设备响应超时，可能正忙；尚不能判定 Wi-Fi 已断开。';
+  if (error.kind === 'http') return '设备服务返回错误：' + error.message;
+  if (error.kind === 'network') return '网络请求失败，请检查设备地址及局域网连接。';
+  if (error instanceof SyntaxError) return '设备返回的数据格式不正确，请重新加载页面。';
+  return '网页请求异常：' + error.message;
+}
+
+// 输入：请求路径和选项；输出：响应正文；作用：使用兼容手机浏览器的原生五秒超时。
+function request(path, options = {}) {
+  // XMLHttpRequest 的超时覆盖完整正文接收，不依赖较新的 AbortSignal.timeout。
+  return new Promise(function executeRequest(resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method || 'GET', path, true);
+    xhr.timeout = 5000;
+    xhr.onload = function requestLoaded() {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+      else reject(requestError('http', 'HTTP ' + xhr.status + ' ' + xhr.responseText.slice(0, 160)));
+    };
+    xhr.onerror = function requestFailed() {
+      reject(requestError('network', '网络请求失败'));
+    };
+    xhr.ontimeout = function requestTimedOut() {
+      reject(requestError('timeout', '请求超过五秒'));
+    };
+    if (options.body !== undefined) {
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded;charset=UTF-8');
+      xhr.send(options.body.toString());
+    } else xhr.send();
+  });
 }
 
 // 输入：无；输出：无；作用：读取实际发送帧率，失败后下次轮询继续重试。
 async function pollStatus() {
-  if (saving) return;
+  if (saving || polling) return;
+  polling = true;
   try {
-    const response = await request('/status');
-    const state = await response.json();
+    const state = JSON.parse(await request('/status'));
+    // 设置提交期间，旧轮询响应不覆盖页面中的最新操作结果。
+    if (saving) return;
     document.getElementById('actualFps').textContent = state.actual_fps.toFixed(1);
     document.getElementById('limitFps').textContent = state.max_fps;
     document.getElementById('connection').textContent = state.connected ? '设备在线' : '网络未连接';
@@ -127,11 +164,14 @@ async function pollStatus() {
       showMessage('已连接。可以开始预览或调整图像。');
     }
   } catch (error) {
-    document.getElementById('connection').textContent = '设备连接中断';
-    showMessage('无法连接设备，请检查 Wi-Fi 和访问地址。', true);
+    if (saving) return;
+    document.getElementById('connection').textContent = error.kind === 'timeout' ? '设备响应超时' : '状态读取失败';
+    showMessage(describeError(error), true);
     initialized = false;
     settings.disabled = true;
     startButton.disabled = true;
+  } finally {
+    polling = false;
   }
 }
 
@@ -149,12 +189,12 @@ async function changeSetting(event) {
     const response = await request('/control', {
       method: 'POST', body: new URLSearchParams({var: control.id, val: value})
     });
-    const state = await response.json();
+    const state = JSON.parse(response);
     updateControls(state);
     document.getElementById('limitFps').textContent = state.max_fps;
     showMessage('设置已生效。');
   } catch (error) {
-    showMessage('设置失败：' + error.message, true);
+    showMessage('设置失败：' + describeError(error), true);
     // 服务拒绝设置后重新读取实际值，不能让页面停留在未生效的状态。
     initialized = false;
   } finally {
@@ -189,7 +229,7 @@ async function stopPreview() {
     await request('/stop', {method: 'POST'});
     showMessage('预览已停止。');
   } catch (error) {
-    showMessage('本页已停止接收，请检查设备连接。', true);
+    showMessage('本页已停止接收。' + describeError(error), true);
   }
   startButton.disabled = !initialized;
 }
