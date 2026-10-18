@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Vehicle · 相机</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,"Microsoft YaHei",sans-serif;background:#0c1421;color:#e5edf7}
+    *{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px 20px}
+    header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}
+    h1{font-size:25px;margin:8px 0}h2{font-size:17px;margin:0 0 20px}.eyebrow{font-size:12px;letter-spacing:2px;color:#80c5ff}
+    .muted{color:#9caec5;font-size:13px;line-height:1.7}.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px}
+    .card{background:#142034;border:1px solid #293a53;border-radius:16px;padding:20px}.preview{background:#060c15;min-height:330px;display:grid;place-items:center;border-radius:10px;overflow:hidden}
+    .preview img{width:100%;height:auto;display:block}.placeholder{color:#8193ac;text-align:center;padding:30px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    button,.button{font:inherit;font-size:14px;padding:10px 16px;border:1px solid #425672;border-radius:8px;background:#21334e;color:#e5edf7;cursor:pointer;text-decoration:none}
+    button.primary{background:#66b8f6;color:#071422;border:0;font-weight:600}button:disabled{opacity:.45;cursor:wait}
+    .metrics{display:flex;gap:28px;flex-wrap:wrap;margin-top:24px}.number{font-size:23px;font-variant-numeric:tabular-nums}.unit{font-size:12px;color:#9caec5}
+    label{display:block;font-size:14px;margin-bottom:8px}.field{margin-bottom:22px}select,input[type=number]{font:inherit;background:#0e192a;color:#e5edf7;border:1px solid #425672;padding:9px;border-radius:7px;width:100%}
+    input[type=range]{width:100%;accent-color:#66b8f6}output{float:right;color:#8fcbff;font-variant-numeric:tabular-nums}.check{display:flex;align-items:center;gap:10px;margin-bottom:16px}.check input{accent-color:#66b8f6;width:17px;height:17px}
+    #message{min-height:24px;font-size:13px;color:#8fcbff;margin-top:14px}#message.error{color:#ffb4ab}.badge{font-size:12px;border:1px solid #425672;padding:7px 12px;border-radius:30px;color:#b6d9f8}
+    fieldset{padding:0;border:0;margin:0;min-width:0}[hidden]{display:none!important}
+    @media(max-width:780px){.layout{grid-template-columns:1fr}header{align-items:flex-start}.preview{min-height:220px}main{padding:20px 14px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">SMART VEHICLE / CAMERA</div><h1>相机控制台</h1><div class="muted">实时预览与图像设置</div></div>
+    <span class="badge" id="connection">正在连接设备</span>
+  </header>
+  <div class="layout">
+    <section class="card" aria-label="视频预览">
+      <div class="preview">
+        <div class="placeholder" id="placeholder">相机已准备<br><span class="muted">点击“开始预览”查看画面</span></div>
+        <img id="video" alt="摄像头实时画面" hidden>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="start" disabled>开始预览</button>
+        <button id="stop" disabled>停止预览</button>
+        <a class="button" href="/capture" target="_blank" rel="noopener">查看单张照片</a>
+      </div>
+      <div class="metrics">
+        <div><div class="muted">实际发送帧率</div><span class="number" id="actualFps">0.0</span> <span class="unit">FPS</span></div>
+        <div><div class="muted">发送上限</div><span class="number" id="limitFps">10</span> <span class="unit">FPS</span></div>
+      </div>
+      <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
+      <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
+    </section>
+    <aside class="card">
+      <h2>图像设置</h2>
+      <fieldset id="settings" disabled>
+        <div class="field"><label for="size">分辨率</label><select id="size" data-setting>
+          <option value="0">160 × 120 · QQVGA</option><option value="1">320 × 240 · QVGA</option>
+          <option value="2" selected>640 × 480 · VGA</option><option value="3">800 × 600 · SVGA</option>
+          <option value="4">1024 × 768 · XGA</option><option value="5">1600 × 1200 · UXGA</option>
+        </select></div>
+        <div class="field"><label for="quality">JPEG 压缩值 <output id="qualityValue">12</output></label>
+          <input id="quality" data-setting type="range" min="10" max="63" value="12"><div class="muted">数值越小，画质越高、数据量越大</div></div>
+        <div class="field"><label for="max_fps">最大帧率（1–30 FPS）</label><input id="max_fps" data-setting type="number" min="1" max="30" step="1" value="10"></div>
+        <div class="field"><label for="brightness">亮度 <output id="brightnessValue">0</output></label><input id="brightness" data-setting type="range" min="-2" max="2" value="0"></div>
+        <div class="field"><label for="contrast">对比度 <output id="contrastValue">0</output></label><input id="contrast" data-setting type="range" min="-2" max="2" value="0"></div>
+        <div class="field"><label for="saturation">饱和度 <output id="saturationValue">0</output></label><input id="saturation" data-setting type="range" min="-2" max="2" value="0"></div>
+        <label class="check"><input id="hmirror" data-setting type="checkbox">水平镜像</label>
+        <label class="check"><input id="vflip" data-setting type="checkbox">垂直翻转</label>
+      </fieldset>
+    </aside>
+  </div>
+</main>
+<script>
+'use strict';
+// 控件与网络请求在浏览器主线程串行处理，不使用额外前端依赖。
+const controls = document.querySelectorAll('[data-setting]');
+const video = document.getElementById('video');
+const startButton = document.getElementById('start');
+const stopButton = document.getElementById('stop');
+const settings = document.getElementById('settings');
+// 首次读取成功前禁用设置；轮询只刷新状态，避免覆盖用户尚未提交的输入。
+let initialized = false;
+// 正在提交设置时暂停状态轮询，避免旧响应覆盖刚提交的新数值。
+let saving = false;
+// 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
+let previewing = false;
+
+// 输入：文本和错误标识；输出：无；作用：集中显示操作结果。
+function showMessage(text, error = false) {
+  const message = document.getElementById('message');
+  message.textContent = text;
+  message.classList.toggle('error', error);
+}
+
+// 输入：服务器状态；输出：无；作用：同步全部参数，失败时也可回滚控件。
+function updateControls(state) {
+  for (const control of controls) {
+    if (control.type === 'checkbox') control.checked = Boolean(state[control.id]);
+    else control.value = state[control.id];
+    updateValue({target: control});
+  }
+}
+
+// 输入：控件事件；输出：无；作用：拖动滑块时仅显示本地值，不连续发送请求。
+function updateValue(event) {
+  const output = document.getElementById(event.target.id + 'Value');
+  if (output) output.value = event.target.value;
+}
+
+// 输入：请求路径和选项；输出：响应；作用：断网或服务忙时五秒超时。
+async function request(path, options = {}) {
+  const response = await fetch(path, {...options, signal: AbortSignal.timeout(5000)});
+  if (!response.ok) throw new Error(await response.text());
+  return response;
+}
+
+// 输入：无；输出：无；作用：读取实际发送帧率，失败后下次轮询继续重试。
+async function pollStatus() {
+  if (saving) return;
+  try {
+    const response = await request('/status');
+    const state = await response.json();
+    document.getElementById('actualFps').textContent = state.actual_fps.toFixed(1);
+    document.getElementById('limitFps').textContent = state.max_fps;
+    document.getElementById('connection').textContent = state.connected ? '设备在线' : '网络未连接';
+    if (!initialized) {
+      updateControls(state);
+      initialized = true;
+      settings.disabled = false;
+      startButton.disabled = previewing;
+      showMessage('已连接。可以开始预览或调整图像。');
+    }
+  } catch (error) {
+    document.getElementById('connection').textContent = '设备连接中断';
+    showMessage('无法连接设备，请检查 Wi-Fi 和访问地址。', true);
+    initialized = false;
+    settings.disabled = true;
+    startButton.disabled = true;
+  }
+}
+
+// 输入：设置控件事件；输出：无；作用：提交单项设置并以设备返回值为准。
+async function changeSetting(event) {
+  const control = event.target;
+  if (!control.checkValidity()) {
+    control.reportValidity();
+    return;
+  }
+  saving = true;
+  settings.disabled = true;
+  const value = control.type === 'checkbox' ? Number(control.checked) : control.value;
+  try {
+    const response = await request('/control', {
+      method: 'POST', body: new URLSearchParams({var: control.id, val: value})
+    });
+    const state = await response.json();
+    updateControls(state);
+    document.getElementById('limitFps').textContent = state.max_fps;
+    showMessage('设置已生效。');
+  } catch (error) {
+    showMessage('设置失败：' + error.message, true);
+    // 服务拒绝设置后重新读取实际值，不能让页面停留在未生效的状态。
+    initialized = false;
+  } finally {
+    saving = false;
+    settings.disabled = !initialized;
+  }
+}
+
+// 输入：无；输出：无；作用：用当前主机的 81 端口打开 MJPEG 连接。
+function startPreview() {
+  previewing = true;
+  const stream = new URL(location.href);
+  stream.port = '81';
+  stream.pathname = '/stream';
+  stream.search = '?t=' + Date.now();
+  video.src = stream.href;
+  video.hidden = false;
+  document.getElementById('placeholder').hidden = true;
+  startButton.disabled = true;
+  stopButton.disabled = false;
+  showMessage('正在接收视频…');
+}
+
+// 输入：无；输出：无；作用：先关闭本页接收，再通知服务器结束旧连接。
+async function stopPreview() {
+  previewing = false;
+  video.removeAttribute('src');
+  video.hidden = true;
+  document.getElementById('placeholder').hidden = false;
+  stopButton.disabled = true;
+  try {
+    await request('/stop', {method: 'POST'});
+    showMessage('预览已停止。');
+  } catch (error) {
+    showMessage('本页已停止接收，请检查设备连接。', true);
+  }
+  startButton.disabled = !initialized;
+}
+
+// 输入：无；输出：无；作用：视频断线后允许重新打开，不无限自动创建连接。
+function streamFailed() {
+  if (!previewing) return;
+  previewing = false;
+  startButton.disabled = !initialized;
+  stopButton.disabled = true;
+  showMessage('视频连接已结束，请点击开始预览重试。', true);
+}
+
+for (const control of controls) {
+  control.addEventListener('input', updateValue);
+  control.addEventListener('change', changeSetting);
+}
+startButton.addEventListener('click', startPreview);
+stopButton.addEventListener('click', stopPreview);
+video.addEventListener('error', streamFailed);
+pollStatus();
+setInterval(pollStatus, 2000);
+</script>
+</body>
+</html>

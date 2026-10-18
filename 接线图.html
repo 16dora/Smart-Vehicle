@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Vehicle｜ESP32-CAM 麦克纳姆小车接线图</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f6fb;
+      --surface: #ffffff;
+      --surface-2: #eaf0f8;
+      --ink: #172033;
+      --muted: #65708a;
+      --line: #c7d0df;
+      --accent: #1f65e5;
+      --power: #e5484d;
+      --logic-power: #e39b22;
+      --ground: #252b38;
+      --i2c: #0b9c77;
+      --control: #7f56d9;
+      --motor: #1677b8;
+      --warning: #b35c00;
+      --shadow: 0 18px 50px rgba(41, 55, 86, .12);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0e1420;
+        --surface: #151d2b;
+        --surface-2: #1d2839;
+        --ink: #edf3ff;
+        --muted: #aebbd1;
+        --line: #334157;
+        --accent: #72a4ff;
+        --power: #ff6d72;
+        --logic-power: #ffc15b;
+        --ground: #d7deeb;
+        --i2c: #39d0aa;
+        --control: #b697ff;
+        --motor: #65b9eb;
+        --warning: #ffba66;
+        --shadow: 0 22px 54px rgba(0, 0, 0, .35);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 36rem),
+        var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      line-height: 1.6;
+    }
+
+    .page { width: min(1500px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 64px; }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr);
+      gap: 28px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+    .hero-copy, .reference-card, .panel {
+      background: color-mix(in srgb, var(--surface) 94%, transparent);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+    .hero-copy { padding: 34px; }
+    .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: .86rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(2rem, 4vw, 4rem); line-height: 1.08; letter-spacing: -.035em; }
+    .lede { max-width: 72ch; margin: 18px 0 0; color: var(--muted); font-size: 1.04rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+    .chip { padding: 7px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: .85rem; }
+
+    .reference-card { overflow: hidden; display: grid; grid-template-rows: 1fr auto; min-height: 280px; }
+    .reference-card img { width: 100%; height: 100%; min-height: 220px; object-fit: cover; object-position: center; background: #fff; }
+    .reference-card figcaption { padding: 14px 18px; color: var(--muted); border-top: 1px solid var(--line); font-size: .88rem; }
+
+    .panel { padding: 24px; margin-top: 24px; }
+    .panel-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 18px; }
+    h2 { margin: 0; font-size: clamp(1.35rem, 2vw, 2rem); line-height: 1.2; }
+    h3 { margin: 0 0 12px; font-size: 1.05rem; }
+    .subtle { margin: 6px 0 0; color: var(--muted); font-size: .9rem; }
+
+    .view-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    button {
+      min-height: 40px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      background: var(--surface);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button[aria-pressed="true"] { color: white; border-color: var(--accent); background: var(--accent); }
+    button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 0 0 14px; color: var(--muted); font-size: .84rem; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .swatch { width: 26px; height: 4px; border-radius: 999px; background: currentColor; }
+    .diagram-shell { overflow: auto; border-radius: 18px; background: var(--surface-2); border: 1px solid var(--line); }
+    .diagram { display: block; width: 100%; min-width: 1100px; height: auto; }
+    .diagram text { font-family: Inter, "Microsoft YaHei", sans-serif; fill: var(--ink); }
+    .diagram .device { fill: var(--surface); stroke: var(--line); stroke-width: 2; }
+    .diagram .device-title { font-size: 20px; font-weight: 700; }
+    .diagram .device-model { font-size: 13px; fill: var(--muted); }
+    .diagram .pin { fill: var(--surface-2); stroke: var(--line); }
+    .diagram .pin-label { font-size: 12px; font-weight: 650; }
+    .diagram .small { font-size: 11px; fill: var(--muted); }
+    .diagram .wire { fill: none; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+    .diagram .wire-thin { stroke-width: 3; }
+    .diagram .power-wire { stroke: var(--power); }
+    .diagram .logic-power-wire { stroke: var(--logic-power); }
+    .diagram .ground-wire { stroke: var(--ground); }
+    .diagram .i2c-wire { stroke: var(--i2c); }
+    .diagram .control-wire { stroke: var(--control); }
+    .diagram .motor-wire { stroke: var(--motor); }
+    .diagram .junction { stroke: var(--surface); stroke-width: 2; }
+    .diagram .power-dot { fill: var(--power); }
+    .diagram .logic-power-dot { fill: var(--logic-power); }
+    .diagram .ground-dot { fill: var(--ground); }
+    .diagram .i2c-dot { fill: var(--i2c); }
+    .diagram .control-dot { fill: var(--control); }
+    .diagram .motor-dot { fill: var(--motor); }
+    .diagram .zone { fill: color-mix(in srgb, var(--surface) 50%, transparent); stroke: var(--line); stroke-dasharray: 8 7; }
+    .diagram .zone-label { font-size: 13px; font-weight: 700; fill: var(--muted); letter-spacing: .06em; }
+    .diagram .note-box { fill: color-mix(in srgb, var(--logic-power) 12%, var(--surface)); stroke: color-mix(in srgb, var(--logic-power) 55%, var(--line)); }
+    .diagram .note { font-size: 12px; fill: var(--ink); }
+    .diagram .hidden-layer { opacity: .07; }
+    .diagram .active-layer { opacity: 1; transition: opacity .2s ease; }
+    .diagram .bb-body { fill: #f7f4ea; stroke: #c9c2af; stroke-width: 3; }
+    .diagram .bb-gutter { fill: #ddd7c9; }
+    .diagram .bb-rule { stroke: #d5cebd; stroke-width: 1; }
+    .diagram .bb-rail-red { stroke: #e5484d; stroke-width: 3; }
+    .diagram .bb-rail-blue { stroke: #3977c9; stroke-width: 3; }
+    .diagram .bb-hole { fill: #807b70; opacity: .72; }
+    .diagram .module-dark { fill: #202a39; stroke: #55647a; stroke-width: 2; }
+    .diagram .module-red { fill: #a9323b; stroke: #d96a72; stroke-width: 2; }
+    .diagram .module-blue { fill: #215f9d; stroke: #5aa2e8; stroke-width: 2; }
+    .diagram .module-text { fill: #fff; font-size: 13px; font-weight: 700; }
+    .diagram .module-sub { fill: #dce5f2; font-size: 11px; }
+    .diagram .terminal { fill: #5b6573; stroke: #c5cfdd; stroke-width: 1; }
+    .diagram .cap-body { fill: #314159; stroke: #8da0bb; stroke-width: 2; }
+    .diagram .cap-leg { stroke: #8793a5; stroke-width: 2; }
+    .diagram .external-zone { fill: none; stroke: color-mix(in srgb, var(--warning) 45%, var(--line)); stroke-dasharray: 7 6; }
+    .rail-key { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+    .rail-key div { padding: 10px 12px; background: var(--surface-2); border-radius: 10px; font-size: .86rem; }
+    .rail-key strong { display: block; margin-bottom: 2px; }
+
+    .warning {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 12px;
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--warning);
+      background: color-mix(in srgb, var(--warning) 9%, var(--surface));
+      border-radius: 10px;
+    }
+    .warning strong { color: var(--warning); }
+
+    .two-col { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(320px, .95fr); gap: 24px; }
+    .photo-card { border-radius: 18px; overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+    .photo-card img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; object-position: center 52%; background: #fff; }
+    .photo-card .caption { padding: 14px 16px; color: var(--muted); font-size: .88rem; }
+
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: .78rem; letter-spacing: .03em; text-transform: uppercase; }
+    tbody tr:last-child td { border-bottom: 0; }
+    code { color: var(--accent); background: var(--surface-2); padding: 2px 5px; border-radius: 5px; }
+    .status-owned { color: var(--i2c); font-weight: 700; }
+    .status-buy { color: var(--warning); font-weight: 700; }
+
+    .channel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; }
+    .channel-group { break-inside: avoid; }
+    .connection { display: grid; grid-template-columns: 54px 1fr; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .connection:last-child { border-bottom: 0; }
+    .channel { color: var(--control); font-weight: 750; }
+    .footnote { margin: 18px 0 0; color: var(--muted); font-size: .84rem; }
+
+    @media (max-width: 900px) {
+      .hero, .two-col { grid-template-columns: 1fr; }
+      .reference-card { min-height: 0; }
+      .panel-head { align-items: start; flex-direction: column; }
+      .channel-grid { grid-template-columns: 1fr; }
+      .rail-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 18px, 1500px); padding-top: 12px; }
+      .hero-copy, .panel { padding: 18px; border-radius: 18px; }
+      .reference-card { border-radius: 18px; }
+      th, td { padding: 9px 7px; }
+      .rail-key { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Smart Vehicle · Wiring Blueprint</p>
+        <h1 id="page-title">ESP32-CAM 麦克纳姆小车<br>免焊接线图</h1>
+        <p class="lede">以现有 AI-Thinker ESP32-CAM、四个黄色 TT 3–6V 减速电机、四个麦克纳姆轮和现有底盘为基础。PCA9685 负责扩展控制通道，两块 L298N 分别驱动前后两组电机。</p>
+        <div class="chips" aria-label="方案摘要">
+          <span class="chip">4轮独立正反转</span>
+          <span class="chip">I²C仅占GPIO13/14</span>
+          <span class="chip">MJPEG Wi‑Fi推流</span>
+          <span class="chip">2S 7.4V供电</span>
+        </div>
+      </div>
+      <figure class="reference-card">
+        <img src="material/esp32-cam.jpg" alt="材料文件夹中的 AI-Thinker ESP32-CAM 与 ESP32-CAM-MB 下载底板照片">
+        <figcaption>参考实物：AI-Thinker ESP32-CAM，照片中装在 ESP32-CAM-MB 下载底板上。下载完成后可拔出并接入整车。</figcaption>
+      </figure>
+    </section>
+
+    <section class="panel" aria-labelledby="diagram-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="diagram-title">整车接线总览</h2>
+          <p class="subtle">点击分类可弱化无关线路。端子名按模块丝印标注；所有 GND 必须共地。</p>
+        </div>
+        <div class="view-controls" role="group" aria-label="线路显示类别">
+          <button type="button" data-view="all" aria-pressed="true">全部线路</button>
+          <button type="button" data-view="power" aria-pressed="false">供电</button>
+          <button type="button" data-view="control" aria-pressed="false">I²C / PWM</button>
+          <button type="button" data-view="motor" aria-pressed="false">电机输出</button>
+        </div>
+      </div>
+
+      <div class="legend" aria-label="接线颜色图例">
+        <span style="color:var(--power)"><i class="swatch"></i>电池正极 7.4V</span>
+        <span style="color:var(--logic-power)"><i class="swatch"></i>稳压 5V / 3.3V</span>
+        <span style="color:var(--ground)"><i class="swatch"></i>公共地 GND</span>
+        <span style="color:var(--i2c)"><i class="swatch"></i>I²C</span>
+        <span style="color:var(--control)"><i class="swatch"></i>PWM / 方向</span>
+        <span style="color:var(--motor)"><i class="swatch"></i>电机输出</span>
+      </div>
+
+      <div class="diagram-shell">
+        <svg class="diagram" viewBox="0 0 1500 930" role="img" aria-labelledby="svg-title svg-desc">
+          <title id="svg-title">ESP32-CAM四轮麦克纳姆智能小车接线图</title>
+          <desc id="svg-desc">2S锂电池为两块L298N电机驱动板供电，并经XL4015E1降压为ESP32-CAM及L298N逻辑电路提供5V。ESP32-CAM通过GPIO13和GPIO14连接PCA9685，后者使用十二个通道控制四台TT电机。</desc>
+
+          <rect class="zone" x="24" y="58" width="345" height="806" rx="24"/>
+          <text class="zone-label" x="46" y="88">POWER｜供电区</text>
+          <rect class="zone" x="395" y="58" width="380" height="806" rx="24"/>
+          <text class="zone-label" x="417" y="88">CONTROLLER｜主控与扩展</text>
+          <rect class="zone" x="801" y="58" width="675" height="806" rx="24"/>
+          <text class="zone-label" x="823" y="88">DRIVE｜驱动与执行</text>
+
+          <!-- 电池与开关 -->
+          <g id="battery-device">
+            <rect class="device" x="58" y="128" width="275" height="140" rx="18"/>
+            <text class="device-title" x="80" y="165">2S1P 18650 锂电池组</text>
+            <text class="device-model" x="80" y="190">7.4V / 2600mAh / BMS ≥ 8A</text>
+            <rect class="pin" x="80" y="216" width="92" height="30" rx="8"/>
+            <text class="pin-label" x="126" y="236" text-anchor="middle">BAT +</text>
+            <rect class="pin" x="218" y="216" width="92" height="30" rx="8"/>
+            <text class="pin-label" x="264" y="236" text-anchor="middle">BAT −</text>
+          </g>
+          <g id="switch-device">
+            <rect class="device" x="83" y="307" width="225" height="86" rx="16"/>
+            <text class="device-title" x="105" y="340">KCD1-101 船型开关</text>
+            <text class="device-model" x="105" y="365">≥ 5A，仅串入电池正极</text>
+          </g>
+
+          <!-- 降压模块 -->
+          <g id="buck-device">
+            <rect class="device" x="58" y="482" width="275" height="190" rx="18"/>
+            <text class="device-title" x="80" y="520">XL4015E1 数显降压模块</text>
+            <text class="device-model" x="80" y="545">输入7.4V，预先调至输出5.00V</text>
+            <rect class="pin" x="80" y="572" width="82" height="28" rx="7"/><text class="pin-label" x="121" y="591" text-anchor="middle">IN+</text>
+            <rect class="pin" x="80" y="618" width="82" height="28" rx="7"/><text class="pin-label" x="121" y="637" text-anchor="middle">IN−</text>
+            <rect class="pin" x="229" y="572" width="82" height="28" rx="7"/><text class="pin-label" x="270" y="591" text-anchor="middle">OUT+</text>
+            <rect class="pin" x="229" y="618" width="82" height="28" rx="7"/><text class="pin-label" x="270" y="637" text-anchor="middle">OUT−</text>
+          </g>
+
+          <!-- ESP32 -->
+          <g id="esp-device">
+            <rect class="device" x="430" y="128" width="310" height="260" rx="18"/>
+            <text class="device-title" x="452" y="165">AI-Thinker ESP32-CAM</text>
+            <text class="device-model" x="452" y="190">ESP32-S + OV2640 + 4MB PSRAM</text>
+            <rect class="pin" x="452" y="218" width="88" height="29" rx="7"/><text class="pin-label" x="496" y="238" text-anchor="middle">5V</text>
+            <rect class="pin" x="452" y="260" width="88" height="29" rx="7"/><text class="pin-label" x="496" y="280" text-anchor="middle">GND</text>
+            <rect class="pin" x="452" y="302" width="88" height="29" rx="7"/><text class="pin-label" x="496" y="322" text-anchor="middle">3V3</text>
+            <rect class="pin" x="628" y="218" width="88" height="29" rx="7"/><text class="pin-label" x="672" y="238" text-anchor="middle">GPIO13</text>
+            <rect class="pin" x="628" y="260" width="88" height="29" rx="7"/><text class="pin-label" x="672" y="280" text-anchor="middle">GPIO14</text>
+            <text class="small" x="452" y="356">TF卡槽保持空置；GPIO16不可使用（PSRAM）</text>
+          </g>
+
+          <!-- PCA9685 -->
+          <g id="pca-device">
+            <rect class="device" x="430" y="482" width="310" height="330" rx="18"/>
+            <text class="device-title" x="452" y="520">PCA9685 PWM扩展板</text>
+            <text class="device-model" x="452" y="545">16路 / 12位 / I²C地址0x40</text>
+            <rect class="pin" x="452" y="572" width="76" height="28" rx="7"/><text class="pin-label" x="490" y="591" text-anchor="middle">VCC</text>
+            <rect class="pin" x="452" y="610" width="76" height="28" rx="7"/><text class="pin-label" x="490" y="629" text-anchor="middle">GND</text>
+            <rect class="pin" x="452" y="648" width="76" height="28" rx="7"/><text class="pin-label" x="490" y="667" text-anchor="middle">SDA</text>
+            <rect class="pin" x="452" y="686" width="76" height="28" rx="7"/><text class="pin-label" x="490" y="705" text-anchor="middle">SCL</text>
+            <rect class="pin" x="452" y="738" width="76" height="28" rx="7"/><text class="pin-label" x="490" y="757" text-anchor="middle">V+</text>
+            <text class="small" x="540" y="757">不连接</text>
+            <rect class="pin" x="638" y="572" width="78" height="28" rx="7"/><text class="pin-label" x="677" y="591" text-anchor="middle">CH0–5</text>
+            <rect class="pin" x="638" y="648" width="78" height="28" rx="7"/><text class="pin-label" x="677" y="667" text-anchor="middle">CH6–11</text>
+          </g>
+
+          <!-- L298N #1 -->
+          <g id="driver1-device">
+            <rect class="device" x="840" y="128" width="300" height="310" rx="18"/>
+            <text class="device-title" x="862" y="165">L298N 双H桥 #1</text>
+            <text class="device-model" x="862" y="190">前轮驱动；ENA/ENB/5V_EN跳帽全部拔除</text>
+            <rect class="pin" x="862" y="217" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="236" text-anchor="middle">+12V / Vs</text>
+            <rect class="pin" x="862" y="254" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="273" text-anchor="middle">GND</text>
+            <rect class="pin" x="862" y="291" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="310" text-anchor="middle">5V</text>
+            <rect class="pin" x="969" y="217" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="236" text-anchor="middle">ENA IN1 IN2</text>
+            <rect class="pin" x="969" y="254" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="273" text-anchor="middle">ENB IN3 IN4</text>
+            <rect class="pin" x="969" y="335" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="354" text-anchor="middle">OUT1 / OUT2</text>
+            <rect class="pin" x="969" y="378" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="397" text-anchor="middle">OUT3 / OUT4</text>
+          </g>
+
+          <!-- L298N #2 -->
+          <g id="driver2-device">
+            <rect class="device" x="840" y="502" width="300" height="310" rx="18"/>
+            <text class="device-title" x="862" y="539">L298N 双H桥 #2</text>
+            <text class="device-model" x="862" y="564">后轮驱动；ENA/ENB/5V_EN跳帽全部拔除</text>
+            <rect class="pin" x="862" y="591" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="610" text-anchor="middle">+12V / Vs</text>
+            <rect class="pin" x="862" y="628" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="647" text-anchor="middle">GND</text>
+            <rect class="pin" x="862" y="665" width="82" height="28" rx="7"/><text class="pin-label" x="903" y="684" text-anchor="middle">5V</text>
+            <rect class="pin" x="969" y="591" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="610" text-anchor="middle">ENA IN1 IN2</text>
+            <rect class="pin" x="969" y="628" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="647" text-anchor="middle">ENB IN3 IN4</text>
+            <rect class="pin" x="969" y="709" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="728" text-anchor="middle">OUT1 / OUT2</text>
+            <rect class="pin" x="969" y="752" width="145" height="28" rx="7"/><text class="pin-label" x="1042" y="771" text-anchor="middle">OUT3 / OUT4</text>
+          </g>
+
+          <!-- 四个电机 -->
+          <g id="motor-devices">
+            <rect class="device" x="1210" y="152" width="224" height="100" rx="18"/>
+            <text class="device-title" x="1232" y="184">M1 左前 FL</text><text class="device-model" x="1232" y="208">TT 1:48 / DC 3–6V</text><text class="small" x="1232" y="231">OUT1 ↔ OUT2</text>
+            <rect class="device" x="1210" y="292" width="224" height="100" rx="18"/>
+            <text class="device-title" x="1232" y="324">M2 右前 FR</text><text class="device-model" x="1232" y="348">TT 1:48 / DC 3–6V</text><text class="small" x="1232" y="371">OUT3 ↔ OUT4</text>
+            <rect class="device" x="1210" y="552" width="224" height="100" rx="18"/>
+            <text class="device-title" x="1232" y="584">M3 左后 RL</text><text class="device-model" x="1232" y="608">TT 1:48 / DC 3–6V</text><text class="small" x="1232" y="631">OUT1 ↔ OUT2</text>
+            <rect class="device" x="1210" y="692" width="224" height="100" rx="18"/>
+            <text class="device-title" x="1232" y="724">M4 右后 RR</text><text class="device-model" x="1232" y="748">TT 1:48 / DC 3–6V</text><text class="small" x="1232" y="771">OUT3 ↔ OUT4</text>
+          </g>
+
+          <!-- POWER LAYER -->
+          <g data-layer="power" class="active-layer">
+            <path class="wire power-wire" d="M126 246 V286 H195 V307"/>
+            <path class="wire power-wire" d="M195 393 V448 H121 V572"/>
+            <path class="wire power-wire" d="M195 448 H790 V231 H862"/>
+            <path class="wire power-wire" d="M790 448 V605 H862"/>
+            <circle class="junction power-dot" cx="195" cy="448" r="7"/>
+            <circle class="junction power-dot" cx="790" cy="448" r="7"/>
+
+            <path class="wire ground-wire" d="M264 246 V452 H121 V618"/>
+            <path class="wire ground-wire" d="M264 452 H380 V275 H452"/>
+            <path class="wire ground-wire" d="M380 452 V624 H452"/>
+            <path class="wire ground-wire" d="M380 452 H770 V268 H862"/>
+            <path class="wire ground-wire" d="M770 452 V642 H862"/>
+            <circle class="junction ground-dot" cx="264" cy="452" r="7"/>
+            <circle class="junction ground-dot" cx="380" cy="452" r="7"/>
+            <circle class="junction ground-dot" cx="770" cy="452" r="7"/>
+
+            <path class="wire logic-power-wire" d="M311 586 H370 V232 H452"/>
+            <path class="wire logic-power-wire" d="M370 586 H790 V305 H862"/>
+            <path class="wire logic-power-wire" d="M790 586 V679 H862"/>
+            <circle class="junction logic-power-dot" cx="370" cy="586" r="7"/>
+            <circle class="junction logic-power-dot" cx="790" cy="586" r="7"/>
+            <path class="wire logic-power-wire wire-thin" d="M540 317 H566 V586 H528"/>
+            <text class="small" x="548" y="604">3.3V → VCC</text>
+          </g>
+
+          <!-- CONTROL LAYER -->
+          <g data-layer="control" class="active-layer">
+            <path class="wire i2c-wire wire-thin" d="M716 232 H758 V662 H528"/>
+            <path class="wire i2c-wire wire-thin" d="M716 274 H774 V700 H528"/>
+            <text class="small" x="596" y="646">GPIO13 → SDA</text>
+            <text class="small" x="596" y="691">GPIO14 → SCL</text>
+            <path class="wire control-wire" d="M716 586 H802 V231 H969"/>
+            <path class="wire control-wire" d="M716 662 H818 V605 H969"/>
+            <text class="small" x="796" y="218">CH0–5</text>
+            <text class="small" x="796" y="592">CH6–11</text>
+          </g>
+
+          <!-- MOTOR LAYER -->
+          <g data-layer="motor" class="active-layer">
+            <path class="wire motor-wire" d="M1114 349 H1170 V202 H1210"/>
+            <path class="wire motor-wire" d="M1114 392 H1187 V342 H1210"/>
+            <path class="wire motor-wire" d="M1114 723 H1170 V602 H1210"/>
+            <path class="wire motor-wire" d="M1114 766 H1187 V742 H1210"/>
+          </g>
+
+          <g>
+            <rect class="note-box" x="58" y="716" width="275" height="104" rx="14"/>
+            <text class="note" x="78" y="747">滤波：每块L298N的Vs/GND并联</text>
+            <text class="note" x="78" y="770">1000µF/16V；ESP32的5V/GND附近</text>
+            <text class="note" x="78" y="793">并联470µF/10V；每台电机并联0.1µF。</text>
+          </g>
+        </svg>
+      </div>
+
+      <div class="warning">
+        <strong>安全边界</strong>
+        <div>面包板和杜邦线仅承载逻辑信号。电池、L298N电源端和四台电机之间必须使用螺丝端子与18/20AWG预剥线；不要让电机电流经过面包板。</div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="breadboard-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="breadboard-title">面包板实物连线图</h2>
+          <p class="subtle">面包板只分配5V、3.3V和GND并承载控制信号；XL4015、L298N和电机位于面包板外。图中同一颜色电源轨上的孔内部相通。</p>
+        </div>
+      </div>
+
+      <div class="legend" aria-label="面包板接线颜色图例">
+        <span style="color:var(--power)"><i class="swatch"></i>7.4V动力电源（粗线）</span>
+        <span style="color:var(--logic-power)"><i class="swatch"></i>5V / 3.3V逻辑电源</span>
+        <span style="color:var(--ground)"><i class="swatch"></i>公共地</span>
+        <span style="color:var(--i2c)"><i class="swatch"></i>GPIO13/14 I²C</span>
+        <span style="color:var(--control)"><i class="swatch"></i>PCA9685控制输出</span>
+      </div>
+
+      <div class="diagram-shell">
+        <svg class="diagram" viewBox="0 0 1700 880" role="img" aria-labelledby="bb-svg-title bb-svg-desc">
+          <title id="bb-svg-title">智能小车面包板与外部模块接线图</title>
+          <desc id="bb-svg-desc">XL4015把7.4V电池降压为5V后送入面包板。ESP32-CAM由5V供电并将3.3V送入另一条电源轨，PCA9685连接3.3V、公共地、GPIO13和GPIO14。两块L298N的逻辑5V及地由面包板提供，动力电源和电机通过粗线及螺丝端子在面包板外连接。</desc>
+          <defs>
+            <pattern id="bb-holes" width="28" height="28" patternUnits="userSpaceOnUse">
+              <circle class="bb-hole" cx="14" cy="14" r="3.3"/>
+            </pattern>
+          </defs>
+
+          <!-- 面包板 -->
+          <rect class="bb-body" x="280" y="96" width="900" height="670" rx="24"/>
+          <text class="device-title" x="310" y="132">BB-830 无焊面包板</text>
+          <text class="device-model" x="530" y="132">仅用于低电流逻辑与信号分配</text>
+
+          <line class="bb-rail-red" x1="320" y1="164" x2="1140" y2="164"/>
+          <line class="bb-rail-blue" x1="320" y1="196" x2="1140" y2="196"/>
+          <text class="pin-label" x="300" y="168" text-anchor="end">+5V</text>
+          <text class="pin-label" x="300" y="200" text-anchor="end">GND</text>
+          <rect x="320" y="217" width="820" height="196" fill="url(#bb-holes)"/>
+          <rect class="bb-gutter" x="320" y="413" width="820" height="24" rx="4"/>
+          <text class="small" x="730" y="430" text-anchor="middle">中央隔离槽</text>
+          <rect x="320" y="437" width="820" height="196" fill="url(#bb-holes)"/>
+          <line class="bb-rail-red" x1="320" y1="684" x2="1140" y2="684"/>
+          <line class="bb-rail-blue" x1="320" y1="716" x2="1140" y2="716"/>
+          <text class="pin-label" x="300" y="688" text-anchor="end">+3V3</text>
+          <text class="pin-label" x="300" y="720" text-anchor="end">GND</text>
+
+          <!-- ESP32-CAM -->
+          <g>
+            <rect class="module-dark" x="400" y="278" width="250" height="208" rx="14"/>
+            <circle cx="525" cy="326" r="29" fill="#141b26" stroke="#8995a8" stroke-width="5"/>
+            <circle cx="525" cy="326" r="10" fill="#892c43"/>
+            <text class="module-text" x="525" y="378" text-anchor="middle">AI-Thinker ESP32-CAM</text>
+            <text class="module-sub" x="525" y="400" text-anchor="middle">ESP32-S + OV2640 + 4MB PSRAM</text>
+            <rect class="terminal" x="414" y="451" width="40" height="24" rx="5"/><text class="module-sub" x="434" y="468" text-anchor="middle">5V</text>
+            <rect class="terminal" x="460" y="451" width="42" height="24" rx="5"/><text class="module-sub" x="481" y="468" text-anchor="middle">GND</text>
+            <rect class="terminal" x="508" y="451" width="44" height="24" rx="5"/><text class="module-sub" x="530" y="468" text-anchor="middle">3V3</text>
+            <rect class="terminal" x="558" y="451" width="39" height="24" rx="5"/><text class="module-sub" x="578" y="468" text-anchor="middle">13</text>
+            <rect class="terminal" x="603" y="451" width="39" height="24" rx="5"/><text class="module-sub" x="623" y="468" text-anchor="middle">14</text>
+          </g>
+
+          <!-- PCA9685 -->
+          <g>
+            <rect class="module-blue" x="750" y="286" width="315" height="190" rx="14"/>
+            <text class="module-text" x="908" y="326" text-anchor="middle">PCA9685 16路12位PWM扩展板</text>
+            <text class="module-sub" x="908" y="349" text-anchor="middle">I²C地址0x40 · V+保持悬空</text>
+            <rect class="terminal" x="772" y="434" width="48" height="26" rx="5"/><text class="module-sub" x="796" y="452" text-anchor="middle">VCC</text>
+            <rect class="terminal" x="826" y="434" width="48" height="26" rx="5"/><text class="module-sub" x="850" y="452" text-anchor="middle">GND</text>
+            <rect class="terminal" x="880" y="434" width="48" height="26" rx="5"/><text class="module-sub" x="904" y="452" text-anchor="middle">SDA</text>
+            <rect class="terminal" x="934" y="434" width="48" height="26" rx="5"/><text class="module-sub" x="958" y="452" text-anchor="middle">SCL</text>
+            <rect class="terminal" x="988" y="434" width="54" height="26" rx="5"/><text class="module-sub" x="1015" y="452" text-anchor="middle">V+×</text>
+            <text class="module-sub" x="780" y="390">CH0–5 → L298N #1</text>
+            <text class="module-sub" x="930" y="390">CH6–11 → L298N #2</text>
+          </g>
+
+          <!-- 面包板电容 -->
+          <g>
+            <line class="cap-leg" x1="692" y1="163" x2="692" y2="248"/>
+            <line class="cap-leg" x1="720" y1="196" x2="720" y2="248"/>
+            <rect class="cap-body" x="680" y="226" width="52" height="76" rx="12"/>
+            <text class="module-text" x="706" y="257" text-anchor="middle">470µF</text>
+            <text class="module-sub" x="706" y="278" text-anchor="middle">10V</text>
+            <text class="small" x="706" y="321" text-anchor="middle">ESP32供电缓冲</text>
+          </g>
+
+          <!-- XL4015 -->
+          <g>
+            <rect class="module-blue" x="30" y="212" width="202" height="170" rx="16"/>
+            <text class="module-text" x="131" y="247" text-anchor="middle">XL4015E1 数显降压</text>
+            <text class="module-sub" x="131" y="272" text-anchor="middle">OUT = 5.00V</text>
+            <rect class="terminal" x="45" y="300" width="70" height="27" rx="5"/><text class="module-sub" x="80" y="319" text-anchor="middle">IN+/IN−</text>
+            <rect class="terminal" x="147" y="300" width="70" height="27" rx="5"/><text class="module-sub" x="182" y="319" text-anchor="middle">OUT+/OUT−</text>
+            <text class="module-sub" x="131" y="356" text-anchor="middle">模块置于面包板外</text>
+          </g>
+
+          <!-- 电池与开关 -->
+          <g>
+            <rect class="device" x="30" y="526" width="202" height="132" rx="16"/>
+            <text class="device-title" x="131" y="561" text-anchor="middle">2S1P 18650 电池组</text>
+            <text class="device-model" x="131" y="586" text-anchor="middle">7.4V / 2600mAh / BMS≥8A</text>
+            <rect class="pin" x="50" y="610" width="62" height="27" rx="6"/><text class="pin-label" x="81" y="629" text-anchor="middle">BAT+</text>
+            <rect class="pin" x="150" y="610" width="62" height="27" rx="6"/><text class="pin-label" x="181" y="629" text-anchor="middle">BAT−</text>
+            <rect class="device" x="78" y="701" width="106" height="55" rx="12"/>
+            <text class="pin-label" x="131" y="724" text-anchor="middle">KCD1-101</text>
+            <text class="small" x="131" y="744" text-anchor="middle">总开关 ≥5A</text>
+          </g>
+
+          <!-- 两块L298N -->
+          <g>
+            <rect class="module-red" x="1250" y="126" width="235" height="250" rx="16"/>
+            <text class="module-text" x="1368" y="160" text-anchor="middle">L298N 双H桥 #1</text>
+            <text class="module-sub" x="1368" y="182" text-anchor="middle">前轮：M1左前 / M2右前</text>
+            <rect class="terminal" x="1270" y="210" width="74" height="27" rx="5"/><text class="module-sub" x="1307" y="229" text-anchor="middle">Vs/+12V</text>
+            <rect class="terminal" x="1350" y="210" width="52" height="27" rx="5"/><text class="module-sub" x="1376" y="229" text-anchor="middle">GND</text>
+            <rect class="terminal" x="1408" y="210" width="52" height="27" rx="5"/><text class="module-sub" x="1434" y="229" text-anchor="middle">5V</text>
+            <text class="module-sub" x="1272" y="274">ENA/IN1/IN2 ← CH0/1/2</text>
+            <text class="module-sub" x="1272" y="300">ENB/IN3/IN4 ← CH3/4/5</text>
+            <text class="module-sub" x="1272" y="335">OUT1/2 → M1　OUT3/4 → M2</text>
+            <text class="module-sub" x="1368" y="358" text-anchor="middle">拔除 ENA、ENB、5V_EN 跳帽</text>
+
+            <rect class="module-red" x="1250" y="500" width="235" height="250" rx="16"/>
+            <text class="module-text" x="1368" y="534" text-anchor="middle">L298N 双H桥 #2</text>
+            <text class="module-sub" x="1368" y="556" text-anchor="middle">后轮：M3左后 / M4右后</text>
+            <rect class="terminal" x="1270" y="584" width="74" height="27" rx="5"/><text class="module-sub" x="1307" y="603" text-anchor="middle">Vs/+12V</text>
+            <rect class="terminal" x="1350" y="584" width="52" height="27" rx="5"/><text class="module-sub" x="1376" y="603" text-anchor="middle">GND</text>
+            <rect class="terminal" x="1408" y="584" width="52" height="27" rx="5"/><text class="module-sub" x="1434" y="603" text-anchor="middle">5V</text>
+            <text class="module-sub" x="1272" y="648">ENA/IN1/IN2 ← CH6/7/8</text>
+            <text class="module-sub" x="1272" y="674">ENB/IN3/IN4 ← CH9/10/11</text>
+            <text class="module-sub" x="1272" y="709">OUT1/2 → M3　OUT3/4 → M4</text>
+            <text class="module-sub" x="1368" y="732" text-anchor="middle">拔除 ENA、ENB、5V_EN 跳帽</text>
+          </g>
+
+          <!-- TT电机标签 -->
+          <g>
+            <rect class="device" x="1515" y="142" width="158" height="96" rx="14"/>
+            <text class="pin-label" x="1594" y="174" text-anchor="middle">M1 左前 FL</text><text class="small" x="1594" y="198" text-anchor="middle">TT 1:48 / 3–6V</text><text class="small" x="1594" y="219" text-anchor="middle">并联0.1µF</text>
+            <rect class="device" x="1515" y="266" width="158" height="96" rx="14"/>
+            <text class="pin-label" x="1594" y="298" text-anchor="middle">M2 右前 FR</text><text class="small" x="1594" y="322" text-anchor="middle">TT 1:48 / 3–6V</text><text class="small" x="1594" y="343" text-anchor="middle">并联0.1µF</text>
+            <rect class="device" x="1515" y="516" width="158" height="96" rx="14"/>
+            <text class="pin-label" x="1594" y="548" text-anchor="middle">M3 左后 RL</text><text class="small" x="1594" y="572" text-anchor="middle">TT 1:48 / 3–6V</text><text class="small" x="1594" y="593" text-anchor="middle">并联0.1µF</text>
+            <rect class="device" x="1515" y="640" width="158" height="96" rx="14"/>
+            <text class="pin-label" x="1594" y="672" text-anchor="middle">M4 右后 RR</text><text class="small" x="1594" y="696" text-anchor="middle">TT 1:48 / 3–6V</text><text class="small" x="1594" y="717" text-anchor="middle">并联0.1µF</text>
+          </g>
+
+          <!-- 低压面包板线路 -->
+          <path class="wire logic-power-wire" d="M217 306 H250 V164 H320"/>
+          <path class="wire ground-wire" d="M217 321 H262 V196 H320"/>
+          <path class="wire logic-power-wire wire-thin" d="M434 451 V164"/>
+          <path class="wire ground-wire wire-thin" d="M481 451 V196"/>
+          <path class="wire logic-power-wire wire-thin" d="M530 475 V684"/>
+          <path class="wire ground-wire wire-thin" d="M350 196 V716"/>
+          <text class="small" x="359" y="454">GND上下轨桥接</text>
+
+          <path class="wire logic-power-wire wire-thin" d="M796 460 V684"/>
+          <path class="wire ground-wire wire-thin" d="M850 460 V716"/>
+          <path class="wire i2c-wire wire-thin" d="M578 475 V536 H904 V460"/>
+          <path class="wire i2c-wire wire-thin" d="M623 475 V558 H958 V460"/>
+          <text class="small" x="718" y="526">GPIO13 → SDA</text>
+          <text class="small" x="718" y="578">GPIO14 → SCL</text>
+
+          <path class="wire logic-power-wire wire-thin" d="M1095 164 H1210 V223 H1408"/>
+          <path class="wire logic-power-wire wire-thin" d="M1125 164 H1198 V597 H1408"/>
+          <path class="wire ground-wire wire-thin" d="M1095 196 H1190 V223 H1350"/>
+          <path class="wire ground-wire wire-thin" d="M1125 196 H1178 V597 H1350"/>
+
+          <!-- PCA到驱动控制线 -->
+          <path class="wire control-wire" d="M1065 370 H1216 V278 H1250"/>
+          <path class="wire control-wire" d="M1065 400 H1228 V652 H1250"/>
+          <text class="small" x="1100" y="357">CH0–5</text>
+          <text class="small" x="1100" y="418">CH6–11</text>
+
+          <!-- 7.4V大电流，绕开面包板 -->
+          <path class="wire power-wire" d="M81 637 V729 H78"/>
+          <path class="wire power-wire" d="M184 729 H246 V464 H1198 V223 H1270"/>
+          <path class="wire power-wire" d="M1198 464 V597 H1270"/>
+          <path class="wire power-wire" d="M246 464 V300 H45"/>
+          <circle class="junction power-dot" cx="246" cy="464" r="7"/>
+          <circle class="junction power-dot" cx="1198" cy="464" r="7"/>
+
+          <path class="wire ground-wire" d="M181 637 V784 H260 V322 H45"/>
+          <path class="wire ground-wire" d="M260 784 H1218 V223 H1350"/>
+          <path class="wire ground-wire" d="M1218 597 H1350"/>
+          <circle class="junction ground-dot" cx="1218" cy="597" r="7"/>
+
+          <!-- 电机输出 -->
+          <path class="wire motor-wire" d="M1485 264 H1500 V190 H1515"/>
+          <path class="wire motor-wire" d="M1485 324 H1500 V314 H1515"/>
+          <path class="wire motor-wire" d="M1485 638 H1500 V564 H1515"/>
+          <path class="wire motor-wire" d="M1485 698 H1500 V688 H1515"/>
+
+          <!-- L298N大电容 -->
+          <g>
+            <rect class="cap-body" x="1208" y="126" width="34" height="62" rx="9"/>
+            <text class="module-sub" x="1225" y="151" text-anchor="middle">1000</text><text class="module-sub" x="1225" y="169" text-anchor="middle">µF</text>
+            <rect class="cap-body" x="1208" y="500" width="34" height="62" rx="9"/>
+            <text class="module-sub" x="1225" y="525" text-anchor="middle">1000</text><text class="module-sub" x="1225" y="543" text-anchor="middle">µF</text>
+          </g>
+
+          <rect class="external-zone" x="8" y="80" width="248" height="708" rx="22"/>
+          <text class="zone-label" x="28" y="108">面包板外｜动力与降压</text>
+          <rect class="external-zone" x="1225" y="82" width="468" height="706" rx="22"/>
+          <text class="zone-label" x="1245" y="108">面包板外｜电机驱动与执行器</text>
+        </svg>
+      </div>
+
+      <div class="rail-key" aria-label="面包板电源轨定义">
+        <div><strong>上方红轨：+5V</strong>来自XL4015 OUT+，连接ESP32-CAM 5V和两块L298N的5V逻辑端。</div>
+        <div><strong>上方蓝轨：GND</strong>来自XL4015 OUT−，连接ESP32、PCA9685及两块L298N的GND。</div>
+        <div><strong>下方红轨：+3.3V</strong>仅由ESP32-CAM 3V3引出，只给PCA9685的VCC供电。</div>
+        <div><strong>下方蓝轨：GND</strong>用一根跳线桥接上方GND轨；不要把3.3V轨与5V轨短接。</div>
+      </div>
+
+      <div class="warning">
+        <strong>摆放说明</strong>
+        <div>ESP32-CAM可用母对公杜邦线连接，不必强行插入面包板；PCA9685和两块L298N也建议固定在底盘上。图中面包板孔位表示电气连接关系，同一电源轨任选空孔即可。</div>
+      </div>
+    </section>
+
+    <section class="panel two-col" aria-labelledby="hardware-title">
+      <div>
+        <h2 id="hardware-title">硬件型号与数量</h2>
+        <p class="subtle">“已有”依据材料图片和你的说明；底盘不再列入采购。</p>
+        <table>
+          <thead><tr><th>部件</th><th>具体型号 / 规格</th><th>数量</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr><td>摄像主控</td><td>AI-Thinker ESP32-CAM，ESP32-S + OV2640 + 4MB PSRAM</td><td>1</td><td class="status-owned">已有</td></tr>
+            <tr><td>下载底板</td><td>ESP32-CAM-MB，CH340/CH343 USB转串口版</td><td>1</td><td class="status-buy">需要</td></tr>
+            <tr><td>直流减速电机</td><td>黄色TT电机，1:48，DC 3–6V，双轴</td><td>4</td><td class="status-owned">已有</td></tr>
+            <tr><td>车轮</td><td>TT轴孔塑料麦克纳姆轮，约60mm，左旋2＋右旋2</td><td>4</td><td class="status-owned">已有</td></tr>
+            <tr><td>车体</td><td>现有四驱小车底盘及TT电机固定件</td><td>1套</td><td class="status-owned">已有</td></tr>
+            <tr><td>PWM扩展</td><td>PCA9685，16路12位I²C PWM，焊好直针</td><td>1</td><td class="status-buy">需要</td></tr>
+            <tr><td>电机驱动</td><td>L298N双H桥模块，带散热片和螺丝端子</td><td>2</td><td class="status-buy">需要</td></tr>
+            <tr><td>降压模块</td><td>XL4015E1数显5A可调降压模块，输出设为5.00V</td><td>1</td><td class="status-buy">需要</td></tr>
+            <tr><td>动力电池</td><td>2S1P 18650，7.4V/2600mAh，内置≥8A BMS</td><td>1组</td><td class="status-buy">需要</td></tr>
+            <tr><td>充电器</td><td>2S锂电专用8.4V/1A充电器，与电池插头匹配</td><td>1</td><td class="status-buy">需要</td></tr>
+            <tr><td>总开关</td><td>KCD1-101二脚船型开关，DC ≥5A</td><td>1</td><td class="status-buy">需要</td></tr>
+            <tr><td>滤波</td><td>1000µF/16V×2、470µF/10V×1、0.1µF瓷片×4</td><td>1套</td><td class="status-buy">需要</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure class="photo-card">
+        <img src="material/tt%20motor.jpg" alt="材料文件夹中的四个黄色TT电机、四个麦克纳姆轮及铝合金底盘参考图">
+        <figcaption class="caption">材料参考图中的轮组：黄色TT电机与四个麦克纳姆轮。你已有底盘，因此实际采购只补齐驱动、供电、控制扩展和连接件。</figcaption>
+      </figure>
+    </section>
+
+    <section class="panel" aria-labelledby="channels-title">
+      <div class="panel-head">
+        <div>
+          <h2 id="channels-title">PCA9685逐线连接表</h2>
+          <p class="subtle">PCA9685设置约1000Hz。方向脚输出全高/全低，ENA/ENB输出0–4095占空比。</p>
+        </div>
+      </div>
+      <div class="channel-grid">
+        <div class="channel-group">
+          <h3>L298N #1｜前轮</h3>
+          <div class="connection"><span class="channel">CH0</span><span>→ ENA，左前 M1 调速</span></div>
+          <div class="connection"><span class="channel">CH1</span><span>→ IN1，左前 M1 方向1</span></div>
+          <div class="connection"><span class="channel">CH2</span><span>→ IN2，左前 M1 方向2</span></div>
+          <div class="connection"><span class="channel">CH3</span><span>→ ENB，右前 M2 调速</span></div>
+          <div class="connection"><span class="channel">CH4</span><span>→ IN3，右前 M2 方向1</span></div>
+          <div class="connection"><span class="channel">CH5</span><span>→ IN4，右前 M2 方向2</span></div>
+        </div>
+        <div class="channel-group">
+          <h3>L298N #2｜后轮</h3>
+          <div class="connection"><span class="channel">CH6</span><span>→ ENA，左后 M3 调速</span></div>
+          <div class="connection"><span class="channel">CH7</span><span>→ IN1，左后 M3 方向1</span></div>
+          <div class="connection"><span class="channel">CH8</span><span>→ IN2，左后 M3 方向2</span></div>
+          <div class="connection"><span class="channel">CH9</span><span>→ ENB，右后 M4 调速</span></div>
+          <div class="connection"><span class="channel">CH10</span><span>→ IN3，右后 M4 方向1</span></div>
+          <div class="connection"><span class="channel">CH11</span><span>→ IN4，右后 M4 方向2</span></div>
+        </div>
+      </div>
+      <p class="footnote">接线前先拔掉两块L298N的 <code>ENA</code>、<code>ENB</code>、<code>5V_EN</code> 三个跳帽。PCA9685的 <code>V+</code> 是舵机电源轨，本车不用，保持悬空。若某个轮子的“正转”方向相反，在软件中反转该电机，不改变通道编号。</p>
+    </section>
+  </main>
+
+  <script>
+    const controls = document.querySelectorAll('[data-view]');
+    const layers = document.querySelectorAll('[data-layer]');
+
+    controls.forEach((button) => {
+      button.addEventListener('click', () => {
+        const view = button.dataset.view;
+        controls.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+        layers.forEach((layer) => {
+          const active = view === 'all' || layer.dataset.layer === view;
+          layer.classList.toggle('hidden-layer', !active);
+          layer.classList.toggle('active-layer', active);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

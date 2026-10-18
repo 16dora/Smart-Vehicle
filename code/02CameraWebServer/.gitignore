@@ -1,0 +1,6 @@
+build/
+managed_components/
+sdkconfig
+sdkconfig.old
+build.log
+include/wifi_credentials.local.h
