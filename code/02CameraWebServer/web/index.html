@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Smart Vehicle · 相机</title>
+  <title>Smart Vehicle · 相机与车辆控制</title>
   <style>
     :root{color-scheme:dark;font-family:system-ui,"Microsoft YaHei",sans-serif;background:#0c1421;color:#e5edf7}
     *{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px 20px}
@@ -19,13 +19,19 @@
     input[type=range]{width:100%;accent-color:#66b8f6}output{float:right;color:#8fcbff;font-variant-numeric:tabular-nums}.check{display:flex;align-items:center;gap:10px;margin-bottom:16px}.check input{accent-color:#66b8f6;width:17px;height:17px}
     #message{min-height:24px;font-size:13px;color:#8fcbff;margin-top:14px}#message.error{color:#ffb4ab}.badge{font-size:12px;border:1px solid #425672;padding:7px 12px;border-radius:30px;color:#b6d9f8}
     fieldset{padding:0;border:0;margin:0;min-width:0}[hidden]{display:none!important}
+    .drive{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.drive h2{margin-bottom:8px}
+    .drive-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:400px;margin:16px auto 8px}
+    .drive-turn{display:flex;gap:8px;max-width:400px;margin:auto}.drive-turn button{flex:1}
+    [data-drive]{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
+    [data-drive].held{background:#66b8f6;color:#071422}.drive-stop{background:#7b353c;border-color:#c16a72}
+    #motorMessage{min-height:24px;color:#b6d9f8;font-size:13px;line-height:1.7}
     @media(max-width:780px){.layout{grid-template-columns:1fr}header{align-items:flex-start}.preview{min-height:220px}main{padding:20px 14px}}
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><div class="eyebrow">SMART VEHICLE / CAMERA</div><h1>相机控制台</h1><div class="muted">实时预览与图像设置</div></div>
+    <div><div class="eyebrow">SMART VEHICLE / CAMERA &amp; DRIVE</div><h1>车辆控制台</h1><div class="muted">实时画面、图像设置与四轮控制</div></div>
     <span class="badge" id="connection">正在连接设备</span>
   </header>
   <div class="layout">
@@ -45,6 +51,31 @@
       </div>
       <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
       <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
+      <div class="drive">
+        <h2>车辆控制 <span class="badge" id="motorState">等待设备状态</span></h2>
+        <p class="muted">按住方向键行驶，松手停车。首次使用请架空车轮核对方向；速度表示 PWM 占空比，不是实测轮速。</p>
+        <fieldset id="motorSettings" disabled>
+          <label for="motorSpeed">速度（最大轮占空比） <output id="motorSpeedValue">30%</output></label>
+          <input id="motorSpeed" type="range" min="0" max="100" step="5" value="30">
+          <div class="drive-grid">
+            <button data-drive data-forward="1" data-right="-1" data-turn="0">↖ 左前</button>
+            <button data-drive data-forward="1" data-right="0" data-turn="0">↑ 前进</button>
+            <button data-drive data-forward="1" data-right="1" data-turn="0">↗ 右前</button>
+            <button data-drive data-forward="0" data-right="-1" data-turn="0">← 左移</button>
+            <button class="drive-stop" id="motorStop">停车</button>
+            <button data-drive data-forward="0" data-right="1" data-turn="0">右移 →</button>
+            <button data-drive data-forward="-1" data-right="-1" data-turn="0">↙ 左后</button>
+            <button data-drive data-forward="-1" data-right="0" data-turn="0">↓ 后退</button>
+            <button data-drive data-forward="-1" data-right="1" data-turn="0">↘ 右后</button>
+          </div>
+          <div class="drive-turn">
+            <button data-drive data-forward="0" data-right="0" data-turn="-1">↶ 原地左转</button>
+            <button data-drive data-forward="0" data-right="0" data-turn="1">原地右转 ↷</button>
+          </div>
+        </fieldset>
+        <p id="motorMessage" role="status" aria-live="polite">正在检查电机模块…</p>
+        <p class="muted">指令中断约 0.5 秒自动停车。当前按 X 型麦轮布局混控，仅使用一个控制页面操作。</p>
+      </div>
     </section>
     <aside class="card">
       <h2>图像设置</h2>
@@ -82,6 +113,49 @@ let saving = false;
 let polling = false;
 // 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
 let previewing = false;
+// 电机控件和状态独立于相机设置，不会因图像设置保存而重建运动连接。
+const motorSettings = document.getElementById('motorSettings');
+// 当前按住的单个按钮；多指触摸不能覆盖已持有的方向。
+let driveButton = null;
+// 按下时捕获的指针编号，用于过滤其他手指的抬起事件。
+let drivePointer = null;
+// 本地操作代次：松手、失焦或失败时递增，丢弃过期异步返回。
+let driveVersion = 0;
+// 服务器停车代次；每次按下先停车取得新值，再允许发送非零指令。
+let motorGeneration = 0;
+// 握手完成后才允许周期续租，避免停车响应之前发出运动请求。
+let driveArmed = false;
+// 握手或续租错误仅显示到下一次实际操作，不被状态轮询立即覆盖。
+let driveError = '';
+// 运动与视频分别使用独立端口，不占用相机控制服务的请求队列。
+const motorUrl = new URL('/motor', location.href);
+motorUrl.port = '82';
+// 运动二进制帧在常连接上发送，不等待逐条状态回报。
+const motorSocketUrl = new URL('/motor/ws', motorUrl);
+motorSocketUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+// 正常每 100 ms 续期；设备端仍为 500 ms 无有效指令停车。
+const DRIVE_PERIOD_MS = 100;
+// 单个续期定时器；松手或失败时清除，不保留旧操作的定时任务。
+let driveTimer = 0;
+// 当前运动连接；旧连接事件必须按对象身份丢弃。
+let motorSocket = null;
+// 每个连接从 1 开始的命令序号，重连后重置，接收端拒绝重复或倒序。
+let socketSeq = 0;
+// 正在等待的停车序号；只有确认该序号之后的状态，才允许开始下一次运动。
+let waitSequence = 0;
+// 等待目的：arm 为按住前停车，stop 为松手后确认。
+let waitMode = '';
+// 最近有效回报序号，避免迟到状态覆盖更新状态。
+let reportSequence = 0;
+// 最近回报、建连、只读查询和重试的单调时间，单位毫秒。
+let lastReportMs = 0;
+let socketOpenedMs = 0;
+let lastQueryMs = 0;
+let reconnectAtMs = 0;
+// 浏览器尚有数据未发送的起点；积压持续 200 ms 就撤销本地操作，不排队旧目标。
+let sendBlockedMs = 0;
+// 页面退出后不再自动重建控制连接。
+let pageLeaving = false;
 
 // 输入：文本和错误标识；输出：无；作用：集中显示操作结果。
 function showMessage(text, error = false) {
@@ -127,7 +201,7 @@ function request(path, options = {}) {
   return new Promise(function executeRequest(resolve, reject) {
     const xhr = new XMLHttpRequest();
     xhr.open(options.method || 'GET', path, true);
-    xhr.timeout = 5000;
+    xhr.timeout = options.timeout || 5000;
     xhr.onload = function requestLoaded() {
       if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
       else reject(requestError('http', 'HTTP ' + xhr.status + ' ' + xhr.responseText.slice(0, 160)));
@@ -136,7 +210,7 @@ function request(path, options = {}) {
       reject(requestError('network', '网络请求失败'));
     };
     xhr.ontimeout = function requestTimedOut() {
-      reject(requestError('timeout', '请求超过五秒'));
+      reject(requestError('timeout', '请求超时（' + xhr.timeout + ' ms）'));
     };
     if (options.body !== undefined) {
       xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded;charset=UTF-8');
@@ -170,6 +244,7 @@ async function pollStatus() {
     initialized = false;
     settings.disabled = true;
     startButton.disabled = true;
+    // 此错误仅代表相机通道异常；运动通道由自己的回复和 500 ms 看门期限判断。
   } finally {
     polling = false;
   }
@@ -242,6 +317,338 @@ function streamFailed() {
   stopButton.disabled = true;
   showMessage('视频连接已结束，请点击开始预览重试。', true);
 }
+
+// 输入：电机快照；输出：无；作用：硬件未就绪时禁用运动，并显示驱动故障。
+function updateMotorState(state) {
+  const ready = Boolean(state && state.enabled && state.ready);
+  motorSettings.disabled = !ready;
+  const badge = document.getElementById('motorState');
+  const message = document.getElementById('motorMessage');
+  if (!state || !state.enabled) {
+    badge.textContent = '未启用';
+    message.textContent = '当前固件未启用电机控制。';
+  } else if (!state.ready) {
+    if (driveButton) stopDrive();
+    badge.textContent = '驱动故障';
+    message.textContent = '电机不可用（错误码 ' + state.fault + '）。请检查 PCA9685 供电和接线后重启；停车状态不能确认。';
+  } else {
+    badge.textContent = state.moving ? '运动指令生效' : '已停车';
+    message.textContent = driveError || (state.moving ? '保持按住方向键，松手即停车。' : '电机已就绪，按住方向键开始。');
+  }
+}
+
+// 输入：无；输出：无；作用：清理本页目标与计时器，不自动恢复已结束的按住动作。
+function clearDrive() {
+  ++driveVersion;
+  clearTimeout(driveTimer);
+  driveTimer = 0;
+  driveArmed = false;
+  waitSequence = 0;
+  waitMode = '';
+  if (driveButton) driveButton.classList.remove('held');
+  driveButton = null;
+  drivePointer = null;
+  sendBlockedMs = 0;
+}
+
+// 输入：说明；输出：无；作用：停止续期并关闭连接，已有运动时仅尝试一次 HTTP 备用停车。
+function failMotorLink(message) {
+  const hadDrive = Boolean(driveButton || driveArmed || waitMode);
+  clearDrive();
+  driveError = message;
+  motorSettings.disabled = true;
+  document.getElementById('motorState').textContent = '运动连接中断';
+  document.getElementById('motorMessage').textContent = message + '。请松开后重新操作。';
+  const old = motorSocket;
+  motorSocket = null;
+  if (old) old.close();
+  reconnectAtMs = performance.now() + 2000;
+  if (hadDrive) sendDriveStop(driveVersion);
+}
+
+// 输入：操作编号和三轴；输出：已发送序号或 0；作用：发送固定 12 字节，积压时不追加旧目标。
+function sendMotorFrame(kind, forward = 0, right = 0, turn = 0) {
+  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN) return 0;
+  if (motorSocket.bufferedAmount > 0) {
+    if (!sendBlockedMs) sendBlockedMs = performance.now();
+    // 停车不排在旧目标后等待；关闭连接并走备用停车。普通重复心跳只保留当前目标。
+    if (kind === 2 || performance.now() - sendBlockedMs >= 200) {
+      failMotorLink('发送积压，已停止续期');
+    }
+    return 0;
+  }
+  sendBlockedMs = 0;
+  if (socketSeq >= 0xfffffffe) {
+    failMotorLink('指令序号需要重新建立连接');
+    return 0;
+  }
+  const data = new ArrayBuffer(12);
+  const view = new DataView(data);
+  view.setUint8(0, kind);
+  view.setUint8(1, forward + 100);
+  view.setUint8(2, right + 100);
+  view.setUint8(3, turn + 100);
+  view.setUint32(4, motorGeneration, false);
+  view.setUint32(8, ++socketSeq, false);
+  try {
+    motorSocket.send(data);
+    return socketSeq;
+  } catch (error) {
+    failMotorLink('运动数据发送失败：' + error.message);
+    return 0;
+  }
+}
+
+// 输入：连接事件；输出：无；作用：连接建立后先读取状态，不发送非零运动目标。
+function motorOpened(event) {
+  if (event.currentTarget !== motorSocket) return;
+  socketOpenedMs = performance.now();
+  lastReportMs = socketOpenedMs;
+  lastQueryMs = socketOpenedMs;
+  document.getElementById('motorState').textContent = '正在读取电机状态';
+  sendMotorFrame(0);
+}
+
+// 输入：紧凑状态文本；输出：无；作用：反馈与续期解耦，停车确认后才激活当前按住。
+function motorReported(event) {
+  if (event.currentTarget !== motorSocket) return;
+  let report;
+  try {
+    report = JSON.parse(event.data);
+    if (!Number.isInteger(report.s) || !Number.isInteger(report.g) || report.s <= 0 ||
+        report.s > socketSeq || report.s < reportSequence || report.g < 0 || report.g > 0xffffffff ||
+        !Number.isInteger(report.c) || !Number.isInteger(report.f) ||
+        ![0, 1].includes(report.e) || ![0, 1].includes(report.r) || ![0, 1].includes(report.m)) {
+      throw new Error('状态格式错误');
+    }
+  } catch (error) {
+    failMotorLink('无法解析运动状态');
+    return;
+  }
+  reportSequence = report.s;
+  lastReportMs = performance.now();
+  const state = {enabled: Boolean(report.e), ready: Boolean(report.r), moving: Boolean(report.m),
+    fault: report.f, generation: report.g};
+  if (report.c !== 0 || (driveArmed && (!state.ready || state.generation !== motorGeneration))) {
+    failMotorLink('设备已撤销运动指令（结果 ' + report.c + '，故障 ' + report.f + '）');
+    return;
+  }
+  if (waitSequence && report.s < waitSequence) return;
+  if (waitSequence) {
+    const mode = waitMode;
+    waitSequence = 0;
+    waitMode = '';
+    if (state.moving) {
+      failMotorLink('停车尚未确认');
+      return;
+    }
+    motorGeneration = state.generation;
+    if (mode === 'arm' && driveButton && state.ready) {
+      driveArmed = true;
+      updateMotorState(state);
+      sendDrive();
+      return;
+    }
+  }
+  if (!driveArmed) motorGeneration = state.generation;
+  updateMotorState(state);
+}
+
+// 输入：关闭事件；输出：无；作用：旧连接关闭事件不干扰新连接，当前连接关闭后不恢复运动。
+function motorClosed(event) {
+  if (event.currentTarget === motorSocket) failMotorLink('运动连接已断开');
+}
+
+// 输入：连接错误；输出：无；作用：区分连接建立失败与单次状态回报延迟。
+function motorFailed(event) {
+  if (event.currentTarget === motorSocket) failMotorLink('无法建立运动连接，请检查是否有其他控制页面');
+}
+
+// 输入：无；输出：无；作用：维护长连接并低频查询空闲状态，运动时不发送 HTTP 轮询。
+function pollMotor() {
+  if (pageLeaving) return;
+  const nowMs = performance.now();
+  if (!motorSocket) {
+    if (document.hidden || nowMs < reconnectAtMs) return;
+    motorSettings.disabled = true;
+    document.getElementById('motorState').textContent = '正在建立运动连接';
+    socketSeq = 0;
+    reportSequence = 0;
+    socketOpenedMs = nowMs;
+    try {
+      motorSocket = new WebSocket(motorSocketUrl.href);
+      motorSocket.addEventListener('open', motorOpened);
+      motorSocket.addEventListener('message', motorReported);
+      motorSocket.addEventListener('close', motorClosed);
+      motorSocket.addEventListener('error', motorFailed);
+    } catch (error) {
+      failMotorLink('运动连接建立失败');
+    }
+    return;
+  }
+  if (motorSocket.readyState === WebSocket.CONNECTING) {
+    if (nowMs - socketOpenedMs > 4000) failMotorLink('运动连接建立超时');
+    return;
+  }
+  if (motorSocket.readyState !== WebSocket.OPEN) return;
+  // 反馈可以晚于单条指令；设备本身的 500 ms 无输入停车期限始终独立生效。
+  if (nowMs - lastReportMs > 2500) {
+    failMotorLink('运动状态长时间未确认');
+    return;
+  }
+  if (nowMs - lastReportMs > 1500) {
+    document.getElementById('motorState').textContent = '状态回报延迟';
+  }
+  if (!driveArmed && nowMs - lastQueryMs >= 1000) {
+    lastQueryMs = nowMs;
+    sendMotorFrame(0);
+  }
+}
+
+// 输入：指针按下；输出：无；作用：先用常连接确认停车和新代次，再开始周期推送。
+function beginDrive(event) {
+  if (motorSettings.disabled || driveButton || event.button !== 0) return;
+  event.preventDefault();
+  driveButton = event.currentTarget;
+  drivePointer = event.pointerId;
+  driveButton.setPointerCapture(event.pointerId);
+  driveButton.classList.add('held');
+  driveError = '';
+  driveArmed = false;
+  ++driveVersion;
+  waitMode = 'arm';
+  waitSequence = sendMotorFrame(2);
+  if (!waitSequence && driveButton) failMotorLink('运动连接尚未就绪');
+}
+
+// 输入：等待毫秒数；输出：无；作用：仅保留一个定时器，避免跳过固定时钟槽后额外等待。
+function scheduleDrive(delayMs) {
+  clearTimeout(driveTimer);
+  driveTimer = setTimeout(sendDrive, delayMs);
+}
+
+// 输入：无；输出：无；作用：每 100 ms 推送当前目标，不等待状态回报，不累计历史目标。
+function sendDrive() {
+  clearTimeout(driveTimer);
+  driveTimer = 0;
+  if (!driveButton || !driveArmed) return;
+  const speed = Number(document.getElementById('motorSpeed').value);
+  if (speed === 0) {
+    stopDrive();
+    return;
+  }
+  const data = driveButton.dataset;
+  // 斜向同时占两个平移轴，先分摊速度，使每个车轮都不超过滑块上限。
+  const level = Math.floor(speed / (Math.abs(Number(data.forward)) + Math.abs(Number(data.right)) + Math.abs(Number(data.turn))));
+  sendMotorFrame(1, data.forward * level, data.right * level, data.turn * level);
+  if (driveButton && driveArmed) scheduleDrive(DRIVE_PERIOD_MS);
+}
+
+// 输入：可选指针事件；输出：无；作用：释放当前操作，尽力发送优先停车请求。
+function stopDrive(event) {
+  if (event && event.pointerId !== undefined && event.pointerId !== drivePointer) return;
+  clearDrive();
+  document.getElementById('motorState').textContent = '正在确认停车';
+  waitMode = 'stop';
+  waitSequence = sendMotorFrame(2);
+  if (!waitSequence && waitMode) {
+    waitMode = '';
+    sendDriveStop(driveVersion);
+  }
+}
+
+// 输入：本地代次；输出：无；作用：仅在连接失败时尽力执行一次备用 HTTP 停车。
+async function sendDriveStop(version) {
+  try {
+    const state = JSON.parse(await request(motorUrl.href, {method: 'POST',
+      body: new URLSearchParams({forward: 0, right: 0, turn: 0}), timeout: 1500}));
+    if (version === driveVersion) {
+      if (motorSocket && motorSocket.readyState === WebSocket.OPEN) updateMotorState(state);
+      else {
+        motorSettings.disabled = true;
+        document.getElementById('motorMessage').textContent = '备用停车已确认，正在等待运动连接重建。';
+      }
+    }
+  } catch (error) {
+    // 不无限重试停车请求；失去续租后仍由板端监视任务撤销输出。
+    if (version === driveVersion) {
+      document.getElementById('motorState').textContent = '停车未确认';
+      document.getElementById('motorMessage').textContent = '停车请求未确认，设备将按指令超时停车；如电机持续运行请切断电机电源。';
+    }
+  }
+}
+
+// 输入：无；输出：无；作用：切后台和窗口失焦均撤销当前按住，不恢复旧运动。
+function pauseDrive() {
+  if (driveButton) stopDrive();
+}
+
+// 输入：无；输出：无；作用：页面离开时尽力提交停车，不能依赖卸载期间的普通 XHR。
+function leaveDrive() {
+  pageLeaving = true;
+  const hadDrive = Boolean(driveButton || driveArmed || waitMode);
+  if (motorSocket && motorSocket.readyState === WebSocket.OPEN && motorSocket.bufferedAmount === 0) sendMotorFrame(2);
+  clearDrive();
+  const old = motorSocket;
+  motorSocket = null;
+  if (old) old.close();
+  if (hadDrive) navigator.sendBeacon(motorUrl.href, new URLSearchParams({forward: 0, right: 0, turn: 0}));
+}
+
+// 输入：无；输出：无；作用：浏览器从页面缓存恢复时只重建连接，不恢复离开前的运动。
+function resumeMotorPage() {
+  if (!pageLeaving) return;
+  pageLeaving = false;
+  reconnectAtMs = 0;
+  motorSettings.disabled = true;
+  pollMotor();
+}
+
+// 输入：无；输出：无；作用：页面隐藏才停车，恢复可见时不自动续租。
+function changeVisibility() {
+  if (document.hidden) pauseDrive();
+}
+
+// 输入：滑块事件；输出：无；作用：显示百分数，降至零时立即停止当前操作。
+function changeMotorSpeed(event) {
+  document.getElementById('motorSpeedValue').value = event.target.value + '%';
+  if (Number(event.target.value) === 0 && driveButton) stopDrive();
+}
+
+// 输入：右键菜单事件；输出：无；作用：触屏长按不打开菜单而丢失按住语义。
+function preventDriveMenu(event) {
+  event.preventDefault();
+}
+
+// 输入：捕获丢失事件；输出：无；作用：忽略已释放按钮的迟到通知，避免干扰新按下。
+function loseDrivePointer(event) {
+  if (driveButton === event.currentTarget) stopDrive(event);
+}
+
+// 输入：无；输出：无；作用：独立停车按钮不受当前活动指针编号限制。
+function pressMotorStop() {
+  stopDrive();
+}
+
+for (const button of document.querySelectorAll('[data-drive]')) {
+  button.addEventListener('pointerdown', beginDrive);
+  button.addEventListener('lostpointercapture', loseDrivePointer);
+  button.addEventListener('contextmenu', preventDriveMenu);
+}
+document.addEventListener('pointerup', stopDrivePointer);
+document.addEventListener('pointercancel', stopDrivePointer);
+// 输入：指针释放事件；输出：无；作用：普通页面点击不发送额外停车请求。
+function stopDrivePointer(event) {
+  if (driveButton) stopDrive(event);
+}
+document.getElementById('motorStop').addEventListener('click', pressMotorStop);
+document.getElementById('motorSpeed').addEventListener('input', changeMotorSpeed);
+window.addEventListener('blur', pauseDrive);
+window.addEventListener('pagehide', leaveDrive);
+window.addEventListener('pageshow', resumeMotorPage);
+document.addEventListener('visibilitychange', changeVisibility);
+pollMotor();
+setInterval(pollMotor, 250);
 
 for (const control of controls) {
   control.addEventListener('input', updateValue);

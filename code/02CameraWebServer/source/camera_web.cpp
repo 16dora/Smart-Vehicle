@@ -37,6 +37,12 @@ CameraWeb& CameraWeb::instance()
 esp_err_t CameraWeb::start()
 {
     ESP_LOGI(TAG, "start() >>");
+    // 尽早撤销 PCA9685 可能保留的输出；未连接电机板时仍允许使用相机。
+    const esp_err_t motorResult = m_motor.start();
+    if (motorResult != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Motor unavailable result=%s; camera startup continues", esp_err_to_name(motorResult));
+    }
     esp_err_t result = initCamera();
     if (result == ESP_OK)
     {
@@ -123,6 +129,9 @@ esp_err_t CameraWeb::initCamera()
         }
         esp_camera_fb_return(initial);
     }
+    // 初始化阶段尚无并发请求；先发布快照，再开放网页和运动服务。
+    m_size = 2;
+    cacheStatus();
     ESP_LOGI(TAG, "initCamera() << result=OK sensor=OV2640 resolution=640x480 fb_count=%d grab_mode=when_empty cpu_mhz=%d xclk_hz=%d",
              m_frameCount, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ, CONFIG_CAMERA_XCLK_FREQ_HZ);
     return ESP_OK;
@@ -284,6 +293,7 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
     else if (id == WIFI_EVENT_AP_STOP)
     {
         app->m_connected.store(false);
+        app->m_motor.requestStop();
         app->m_epoch.fetch_add(1);
         ESP_LOGW(TAG, "SoftAP stopped");
     }
@@ -294,6 +304,8 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
     }
     else if (id == WIFI_EVENT_AP_STADISCONNECTED)
     {
+        // 任一热点客户端离开都要求停车；只投递要求，不阻塞 Wi-Fi 事件线程。
+        app->m_motor.requestStop();
         const auto* event = static_cast<wifi_event_ap_stadisconnected_t*>(data);
         ESP_LOGI(TAG, "SoftAP client disconnected aid=%u reason=%u", event->aid, event->reason);
         wifi_sta_list_t clients = {};
@@ -325,6 +337,7 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
     {
         const auto* event = static_cast<wifi_event_sta_disconnected_t*>(data);
         app->m_connected.store(false);
+        app->m_motor.requestStop();
         // 断线使旧视频循环失效；三秒后重试，持续等待路由器恢复。
         app->m_epoch.fetch_add(1);
         ESP_LOGW(TAG, "Wi-Fi disconnected reason=%u; retry in 3 seconds", event->reason);
@@ -350,8 +363,8 @@ void CameraWeb::reconnectWifi(void* arg)
 
 esp_err_t CameraWeb::startServers()
 {
-    // 两个服务内部占用六个 socket，最多再接收五个客户端连接。
-    static_assert(CONFIG_LWIP_MAX_SOCKETS >= 11, "Two HTTP servers need at least 11 sockets");
+    // 三个服务按内部九项加 4+1+3 个客户端保守预算，余量用于 DHCP 等网络操作。
+    static_assert(CONFIG_LWIP_MAX_SOCKETS >= 20, "Three HTTP servers need at least 20 sockets");
     ESP_LOGI(TAG, "startServers() >>");
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
@@ -365,7 +378,7 @@ esp_err_t CameraWeb::startServers()
     config.lru_purge_enable = true;
     config.send_wait_timeout = 3;
     config.recv_wait_timeout = 3;
-    // 两个服务复用此配置，所有新连接在发送 HTTP 头部之前就完成 TCP 配置。
+    // 三个服务复用连接配置，所有新连接均禁用 TCP 小包合并等待。
     config.open_fn = onSocketOpen;
     ESP_RETURN_ON_ERROR(httpd_start(&m_control, &config), TAG, "control server failed");
     const char* paths[] = {"/", "/status", "/control", "/stop", "/capture"};
@@ -420,7 +433,65 @@ esp_err_t CameraWeb::startServers()
         m_control = nullptr;
         return registered;
     }
-    ESP_LOGI(TAG, "startServers() << result=OK control=80 stream=81 socket_budget=%d",
+    // 运动单独使用服务任务；相机取帧、抓拍发送及参数设置不占用此请求队列。
+    config.server_port = 82;
+    config.ctrl_port += 1;
+    config.stack_size = 4096;
+    config.task_priority = tskIDLE_PRIORITY + 6;
+    config.max_uri_handlers = 3;
+    config.max_open_sockets = 3;
+    // 不因临时只读请求淘汰仍有效的控制长连接。
+    config.lru_purge_enable = false;
+    config.close_fn = closeMotorSocket;
+    config.recv_wait_timeout = 1;
+    config.send_wait_timeout = 1;
+    ESP_LOGI(TAG, "httpd_start() >> port=82 priority=6 stack_bytes=4096 max_clients=3 timeout_s=1");
+    esp_err_t motionResult = httpd_start(&m_motion, &config);
+    ESP_LOGI(TAG, "httpd_start() << result=%s port=82", esp_err_to_name(motionResult));
+    if (motionResult == ESP_OK)
+    {
+        // 同一路径的 GET 只读状态，POST 才能续期或停车，均不接触相机锁。
+        for (httpd_method_t method : {HTTP_GET, HTTP_POST})
+        {
+            httpd_uri_t motorUri = {};
+            motorUri.uri = "/motor";
+            motorUri.method = method;
+            motorUri.handler = onMotor;
+            motorUri.user_ctx = this;
+            ESP_LOGI(TAG, "httpd_register_uri_handler() >> port=82 uri=/motor method=%s",
+                     method == HTTP_GET ? "GET" : "POST");
+            motionResult = httpd_register_uri_handler(m_motion, &motorUri);
+            ESP_LOGI(TAG, "httpd_register_uri_handler() << result=%s", esp_err_to_name(motionResult));
+            if (motionResult != ESP_OK) break;
+        }
+    }
+    if (motionResult == ESP_OK)
+    {
+        httpd_uri_t socketUri = {};
+        socketUri.uri = "/motor/ws";
+        socketUri.method = HTTP_GET;
+        socketUri.handler = onMotorSocket;
+        socketUri.user_ctx = this;
+        socketUri.is_websocket = true;
+        socketUri.ws_pre_handshake_cb = openMotorSocket;
+        ESP_LOGI(TAG, "httpd_register_uri_handler() >> port=82 uri=/motor/ws websocket=1");
+        motionResult = httpd_register_uri_handler(m_motion, &socketUri);
+        ESP_LOGI(TAG, "httpd_register_uri_handler() << result=%s", esp_err_to_name(motionResult));
+    }
+    if (motionResult != ESP_OK)
+    {
+        // 运动服务不可用时不留下半启动状态，关闭已创建的服务并保持电机停止。
+        m_motor.stop("motion server failed");
+        if (m_motion != nullptr) httpd_stop(m_motion);
+        httpd_stop(m_stream);
+        httpd_stop(m_control);
+        m_motion = nullptr;
+        m_stream = nullptr;
+        m_control = nullptr;
+        ESP_LOGE(TAG, "startServers() << result=%s", esp_err_to_name(motionResult));
+        return motionResult;
+    }
+    ESP_LOGI(TAG, "startServers() << result=OK control=80 stream=81 motor=82 socket_budget=%d",
              CONFIG_LWIP_MAX_SOCKETS);
     return ESP_OK;
 }
@@ -660,6 +731,8 @@ esp_err_t CameraWeb::sendPerf(httpd_req_t* req)
                 result = ESP_ERR_INVALID_ARG;
             }
         }
+        // 测量接口可能关闭或重建相机，及时使缓存失效或发布重建后的状态。
+        cacheStatus();
         if (result != ESP_OK)
         {
             ESP_LOGE(TAG, "sendPerf() << result=%s", esp_err_to_name(result));
@@ -763,27 +836,351 @@ esp_err_t CameraWeb::sendPerf(httpd_req_t* req)
 }
 #endif
 
+// 输入：请求和来源要求；输出：是否允许；作用：HTTP 诊断可无来源，浏览器长连接必须同源设备。
+bool CameraWeb::isMotorOrigin(httpd_req_t* req, bool required)
+{
+    char origin[96] = {};
+    char host[64] = {};
+    char allowed[80] = {};
+    if (httpd_req_get_hdr_value_str(req, "Host", host, sizeof(host)) != ESP_OK)
+    {
+        // 运动页面从同一设备的 80 端口加载，不接受缺少有效设备地址的请求。
+        return false;
+    }
+    // 当前工程使用 IPv4/主机名和 HTTP；去掉运动端口，得到网页所在的 80 端口来源。
+    const size_t length = std::strcspn(host, ":");
+    std::snprintf(allowed, sizeof(allowed), "http://%.*s", static_cast<int>(length), host);
+    if (httpd_req_get_hdr_value_len(req, "Origin") > 0)
+    {
+        if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) != ESP_OK ||
+            std::strcmp(origin, allowed) != 0)
+        {
+            // 仅允许本设备网页跨端口读取握手结果，不向任意网站开放运动通道。
+            return false;
+        }
+        return true;
+    }
+    return !required;
+}
+
+// 输入：运动 HTTP 请求；输出：响应结果；作用：保留低频诊断和备用停车，不用于网页周期续期。
+esp_err_t CameraWeb::onMotor(httpd_req_t* req)
+{
+    auto* app = static_cast<CameraWeb*>(req->user_ctx);
+    if (!isMotorOrigin(req, false))
+    {
+        ESP_LOGW(TAG, "onMotor() << result=ORIGIN_REJECTED");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Use the device webpage on port 80");
+    }
+    // SDK 保留字符串地址直到响应发送完成；缓冲必须留在当前请求调用栈中。
+    char origin[96] = {};
+    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK)
+    {
+        httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", origin);
+        httpd_resp_set_hdr(req, "Vary", "Origin");
+    }
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return req->method == HTTP_GET ? app->sendMotor(req) : app->setMotor(req);
+}
+
+// 输入：升级请求；输出：准入结果；作用：握手前保留唯一控制连接，不自动启动电机。
+esp_err_t CameraWeb::openMotorSocket(httpd_req_t* req)
+{
+    auto* app = static_cast<CameraWeb*>(req->user_ctx);
+    ESP_LOGI(TAG, "openMotorSocket() >>");
+    if (!isMotorOrigin(req, true))
+    {
+        ESP_LOGW(TAG, "openMotorSocket() << result=ORIGIN_REJECTED");
+        httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Use the device webpage on port 80");
+        return ESP_FAIL;
+    }
+    if (app->m_motorFd >= 0)
+    {
+        // 控制页面独占连接，额外页面不能抢占正在运动的操作者。
+        ESP_LOGW(TAG, "openMotorSocket() << result=CONTROLLER_BUSY");
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_sendstr(req, "Another control page is connected");
+        return ESP_FAIL;
+    }
+    app->m_motorFd = httpd_req_to_sockfd(req);
+    app->m_motorSeq = 0;
+    app->m_reportUs = 0;
+    app->m_reportGen = 0;
+    app->m_isReportedMoving = false;
+    ESP_LOGI(TAG, "openMotorSocket() << result=ESP_OK socket=%d", app->m_motorFd);
+    return ESP_OK;
+}
+
+// 输入：连接、序号和业务结果；输出：发送结果；作用：单次非阻塞写入完整 WS 文本帧。
+esp_err_t CameraWeb::reportMotor(int socketFd, uint32_t sequence, esp_err_t result)
+{
+    const MotorState state = m_motor.getState();
+    char text[126];
+    const int length = std::snprintf(text, sizeof(text),
+        "{\"e\":%d,\"r\":%d,\"m\":%d,\"f\":%d,\"g\":%lu,\"s\":%lu,\"c\":%d}",
+        int(state.enabled), int(state.ready), int(state.moving), state.fault,
+        static_cast<unsigned long>(state.generation), static_cast<unsigned long>(sequence), result);
+    if (length <= 0 || length >= static_cast<int>(sizeof(text)))
+    {
+        // 短文本帧不超过 125 字节，拒绝截断数据，不能破坏后续帧边界。
+        ESP_LOGE(TAG, "reportMotor() << result=STATE_TOO_LARGE");
+        return ESP_FAIL;
+    }
+    std::array<uint8_t, 127> packet{};
+    // 服务端帧无需掩码；将头和正文合成一次写入，避免两个微小 TCP 包。
+    packet[0] = 0x81;
+    packet[1] = static_cast<uint8_t>(length);
+    std::memcpy(packet.data() + 2, text, length);
+    ESP_LOGD(TAG, "send() >> socket=%d bytes=%d flags=MSG_DONTWAIT", socketFd, length + 2);
+    const int count = send(socketFd, packet.data(), length + 2, MSG_DONTWAIT);
+    const int sendErr = count < 0 ? errno : 0;
+    ESP_LOGD(TAG, "send() << result=%d errno=%d", count, sendErr);
+    if (count < 0 && (sendErr == EAGAIN || sendErr == EWOULDBLOCK))
+    {
+        // 缓冲拥塞时不排队、不等待 ACK；下一条输入合并为最新状态再次尝试。
+        return ESP_OK;
+    }
+    if (count != length + 2)
+    {
+        // 已写入半帧时不能接着发送另一帧；关闭连接，触发失联停车。
+        ESP_LOGW(TAG, "reportMotor() << result=SEND_FAILED bytes=%d errno=%d", count, sendErr);
+        return ESP_FAIL;
+    }
+    m_reportUs = esp_timer_get_time();
+    m_reportGen = state.generation;
+    m_isReportedMoving = state.moving;
+    return ESP_OK;
+}
+
+// 输入：12 字节二进制指令；输出：接收结果；作用：顺序验证后执行，正常续期每 500 ms 合并回报。
+esp_err_t CameraWeb::onMotorSocket(httpd_req_t* req)
+{
+    auto* app = static_cast<CameraWeb*>(req->user_ctx);
+    const int socketFd = httpd_req_to_sockfd(req);
+    std::array<uint8_t, 12> data{};
+    httpd_ws_frame_t frame = {};
+    frame.payload = data.data();
+    ESP_LOGD(TAG, "httpd_ws_recv_frame() >> socket=%d max_bytes=12", socketFd);
+    const esp_err_t received = httpd_ws_recv_frame(req, &frame, data.size());
+    ESP_LOGD(TAG, "httpd_ws_recv_frame() << result=%s bytes=%u", esp_err_to_name(received), unsigned(frame.len));
+    if (received != ESP_OK || frame.type != HTTPD_WS_TYPE_BINARY || frame.len != data.size() ||
+        socketFd != app->m_motorFd || data[0] > 2 || data[1] > 200 || data[2] > 200 || data[3] > 200)
+    {
+        // 畸形帧或非当前控制连接都不能执行运动；返回失败由关闭回调投递停车。
+        ESP_LOGW(TAG, "onMotorSocket() << result=INVALID_FRAME socket=%d", socketFd);
+        return ESP_FAIL;
+    }
+    uint32_t generation = 0;
+    uint32_t sequence = 0;
+    for (size_t index = 0; index < 4; ++index)
+    {
+        // 明确按网络大端解码，不依赖 ESP32 和浏览器端的本机字节序。
+        generation = (generation << 8) | data[4 + index];
+        sequence = (sequence << 8) | data[8 + index];
+    }
+    if (sequence == 0 || sequence <= app->m_motorSeq)
+    {
+        ESP_LOGW(TAG, "onMotorSocket() << result=STALE_SEQUENCE");
+        return ESP_FAIL;
+    }
+    app->m_motorSeq = sequence;
+    esp_err_t result = ESP_OK;
+    if (data[0] == 2)
+    {
+        // 停车不要求代次，始终优先撤销当前输出；回报用于确认下一次按住的代次。
+        result = app->m_motor.stop("websocket stop");
+    }
+    else if (data[0] == 1)
+    {
+        if (!app->m_connected.load())
+        {
+            app->m_motor.requestStop();
+            result = ESP_ERR_INVALID_STATE;
+        }
+        else
+        {
+            result = app->m_motor.move(int(data[1]) - 100, int(data[2]) - 100,
+                                       int(data[3]) - 100, generation);
+        }
+    }
+    // 操作 0 只读取快照，不写外设，也不延长有效运动期限。
+    const MotorState state = app->m_motor.getState();
+    if (data[0] != 1 || result != ESP_OK || state.generation != app->m_reportGen ||
+        state.moving != app->m_isReportedMoving ||
+        esp_timer_get_time() - app->m_reportUs >= 500000)
+    {
+        // 查询、停车、故障立即回报；相同运动心跳不逐条发送响应。
+        const esp_err_t sent = app->reportMotor(socketFd, sequence, result);
+        return result == ESP_OK ? sent : ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+// 输入：关闭的连接；输出：无；作用：仅控制连接断开才停车，不让诊断 GET 的关闭干扰车辆。
+void CameraWeb::closeMotorSocket(httpd_handle_t server, int socketFd)
+{
+    auto& app = CameraWeb::instance();
+    if (socketFd == app.m_motorFd)
+    {
+        app.m_motorFd = -1;
+        app.m_motorSeq = 0;
+        app.m_motor.requestStop();
+        ESP_LOGW(TAG, "closeMotorSocket() >> controller_disconnected socket=%d", socketFd);
+    }
+    ESP_LOGD(TAG, "close() >> socket=%d", socketFd);
+    const int result = close(socketFd);
+    ESP_LOGD(TAG, "close() << result=%d", result);
+}
+
+// 输入：无；输出：无；作用：相机初始化、设置变更和帧率更新时发布小型状态快照。
+void CameraWeb::cacheStatus()
+{
+    // 调用方已持有相机锁，或仍在单线程初始化阶段；这里只短暂持有快照锁。
+    ESP_LOGI(TAG, "esp_camera_sensor_get() >> status_snapshot");
+    const sensor_t* sensor = esp_camera_sensor_get();
+    ESP_LOGI(TAG, "esp_camera_sensor_get() << ready=%d", int(sensor != nullptr));
+    std::lock_guard<std::mutex> lock(m_statusMutex);
+    if (sensor == nullptr)
+    {
+        // 测量模式关闭相机时清空快照，不能把历史数据描述为当前有效参数。
+        m_statusJson[0] = '\0';
+        return;
+    }
+    const auto& state = sensor->status;
+    std::snprintf(m_statusJson.data(), m_statusJson.size(),
+        "{\"size\":%d,\"quality\":%d,\"max_fps\":%d,\"actual_fps\":%.2f,"
+        "\"brightness\":%d,\"contrast\":%d,\"saturation\":%d,"
+        "\"hmirror\":%d,\"vflip\":%d,\"streaming\":%s",
+        m_size, state.quality, m_maxFps, m_actualFps,
+        state.brightness, state.contrast, state.saturation, state.hmirror, state.vflip,
+        m_streaming ? "true" : "false");
+}
+
 esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
 {
-    char json[512];
+    char json[1024];
+    std::array<char, 512> cached;
+    // 只读已发布快照；相机取帧即使等待四秒，也不会阻塞本次状态读取。
+    const MotorState motor = m_motor.getState();
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        const sensor_t* sensor = esp_camera_sensor_get();
-        if (sensor == nullptr)
-        {
-            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not ready");
-        }
-        const auto& state = sensor->status;
-        std::snprintf(json, sizeof(json),
-            "{\"size\":%d,\"quality\":%d,\"max_fps\":%d,\"actual_fps\":%.2f,"
-            "\"brightness\":%d,\"contrast\":%d,\"saturation\":%d,"
-            "\"hmirror\":%d,\"vflip\":%d,\"streaming\":%s,\"connected\":%s}",
-            m_size, state.quality, m_maxFps, m_actualFps,
-            state.brightness, state.contrast, state.saturation, state.hmirror, state.vflip,
-            m_streaming ? "true" : "false", m_connected.load() ? "true" : "false");
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        cached = m_statusJson;
     }
+    if (cached[0] == '\0')
+    {
+        // 即使相机不可用，错误响应也在释放快照锁后发送，避免慢客户端阻塞发布。
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not ready");
+    }
+    std::snprintf(json, sizeof(json),
+        "%s,\"connected\":%s,\"motor\":{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,"
+        "\"generation\":%lu,\"forward\":%d,\"right\":%d,\"turn\":%d,\"wheels\":[%d,%d,%d,%d]}}",
+        cached.data(), m_connected.load() ? "true" : "false",
+        motor.enabled ? "true" : "false", motor.ready ? "true" : "false", motor.moving ? "true" : "false",
+        motor.fault, static_cast<unsigned long>(motor.generation), motor.forward, motor.right, motor.turn,
+        motor.wheels[0], motor.wheels[1], motor.wheels[2], motor.wheels[3]);
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, json);
+}
+
+// 输入：请求；输出：独立电机 JSON；作用：避免运动续租依赖相机状态读取。
+esp_err_t CameraWeb::sendMotor(httpd_req_t* req)
+{
+    const MotorState state = m_motor.getState();
+    char json[384];
+    std::snprintf(json, sizeof(json),
+        "{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,\"generation\":%lu,"
+        "\"forward\":%d,\"right\":%d,\"turn\":%d,\"wheels\":[%d,%d,%d,%d]}",
+        state.enabled ? "true" : "false", state.ready ? "true" : "false",
+        state.moving ? "true" : "false", state.fault,
+        static_cast<unsigned long>(state.generation), state.forward, state.right, state.turn,
+        state.wheels[0], state.wheels[1], state.wheels[2], state.wheels[3]);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, json);
+}
+
+// 输入：三轴百分数和指令代次表单；输出：HTTP 结果；作用：严格校验后续租或停车。
+esp_err_t CameraWeb::setMotor(httpd_req_t* req)
+{
+    char body[160] = {};
+    if (req->content_len == 0 || req->content_len >= sizeof(body))
+    {
+        // 有问题的控制请求撤销旧运动，不能依靠旧指令继续行驶。
+        m_motor.stop("invalid body");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid motor body length");
+    }
+    size_t received = 0;
+    while (received < req->content_len)
+    {
+        // 网络分段接收直到正文完整；中断立即停车，不对部分参数执行运动。
+        const int count = httpd_req_recv(req, body + received, req->content_len - received);
+        if (count <= 0)
+        {
+            m_motor.stop("incomplete command");
+            return ESP_FAIL;
+        }
+        received += count;
+    }
+    const char* names[] = {"forward", "right", "turn"};
+    int values[3] = {};
+    for (size_t axis = 0; axis < 3; ++axis)
+    {
+        char text[16] = {};
+        char* end = nullptr;
+        errno = 0;
+        const esp_err_t parsed = httpd_query_key_value(body, names[axis], text, sizeof(text));
+        const long value = std::strtol(text, &end, 10);
+        if (parsed != ESP_OK || errno != 0 || end == text || *end != '\0' || value < -100 || value > 100)
+        {
+            m_motor.stop("invalid axis");
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected axes in -100..100");
+        }
+        values[axis] = static_cast<int>(value);
+    }
+    if (values[0] == 0 && values[1] == 0 && values[2] == 0)
+    {
+        // 全零停车不要求代次，即使网页状态已经过期也能撤销当前运动。
+        const esp_err_t result = m_motor.stop("web stop");
+        if (result != ESP_OK)
+        {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Motor stop unconfirmed; check hardware");
+        }
+        return sendMotor(req);
+    }
+    if (m_motorFd >= 0)
+    {
+        // 长连接控制期间只保留 HTTP 备用停车和只读诊断，避免两个通道同时改变方向。
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "Use the active WebSocket controller");
+    }
+    char text[16] = {};
+    char* end = nullptr;
+    errno = 0;
+    const esp_err_t parsed = httpd_query_key_value(body, "generation", text, sizeof(text));
+    const unsigned long generation = std::strtoul(text, &end, 10);
+    if (parsed != ESP_OK || text[0] == '-' || errno != 0 || end == text || *end != '\0')
+    {
+        m_motor.stop("invalid generation");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected unsigned generation");
+    }
+    if (!m_connected.load())
+    {
+        // 网络接口未就绪时只能停车，不接受新运动。
+        m_motor.requestStop();
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        return httpd_resp_sendstr(req, "Network unavailable");
+    }
+    const esp_err_t result = m_motor.move(values[0], values[1], values[2], generation);
+    if (result == ESP_ERR_INVALID_STATE)
+    {
+        // 迟到包只拒绝，不再触发停车，防止旧包干扰已经建立的新代次。
+        httpd_resp_set_status(req, "409 Conflict");
+        return httpd_resp_sendstr(req, "Motor unavailable or stale generation; release and retry");
+    }
+    if (result != ESP_OK)
+    {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Motor driver failed; check hardware");
+    }
+    return sendMotor(req);
 }
 
 esp_err_t CameraWeb::setControl(httpd_req_t* req)
@@ -824,6 +1221,7 @@ esp_err_t CameraWeb::setControl(httpd_req_t* req)
         std::lock_guard<std::mutex> lock(m_mutex);
         // 参数设置与取帧互斥，避免传感器寄存器在另一个任务采集时被并发修改。
         applied = applySetting(name, static_cast<int>(value));
+        cacheStatus();
     }
     ESP_LOGI(TAG, "setControl() << result=%s", applied ? "OK" : "REJECTED");
     if (!applied)
@@ -904,6 +1302,7 @@ void CameraWeb::finishStream()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_streaming = false;
     m_actualFps = 0;
+    cacheStatus();
 }
 
 esp_err_t CameraWeb::onStream(httpd_req_t* req)
@@ -926,6 +1325,9 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
     int64_t window = 0;
     int64_t nextFrame = esp_timer_get_time();
     esp_err_t result = ESP_OK;
+    // 每个预览连接复用一个 PSRAM 发送缓冲，合并边界、JPEG 和结尾，减少微小 TCP 写入。
+    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> packet(nullptr, heap_caps_free);
+    size_t capacity = 0;
     while (app->m_connected.load() && epoch == app->m_epoch.load())
     {
         // 使用单调时钟限速；向上取整到 tick，保证发送频率不超过设定上限。
@@ -947,7 +1349,12 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         {
             std::lock_guard<std::mutex> lock(app->m_mutex);
             maxFps = app->m_maxFps;
-            app->m_streaming = true;
+            if (!app->m_streaming)
+            {
+                // 只在开始时发布状态，不为每一帧重复格式化 JSON。
+                app->m_streaming = true;
+                app->cacheStatus();
+            }
             captureStart = esp_timer_get_time();
             frame = esp_camera_fb_get();
             captureUs = esp_timer_get_time() - captureStart;
@@ -972,24 +1379,41 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
                      (long long)((captureStart - started) / 1000));
         }
         char header[128];
+        const size_t jpegBytes = frame->len;
         const int length = std::snprintf(header, sizeof(header),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
-            unsigned(frame->len));
+            unsigned(jpegBytes));
+        const size_t needed = length + jpegBytes + 2;
+        if (needed > capacity)
+        {
+            // 以 4 KiB 为单位扩容并复用，避免 JPEG 长度小幅变化造成逐帧堆分配。
+            const size_t nextSize = (needed + 4095) & ~size_t(4095);
+            ESP_LOGI(TAG, "heap_caps_realloc() >> bytes=%u caps=PSRAM|8BIT", unsigned(nextSize));
+            auto* resized = static_cast<uint8_t*>(heap_caps_realloc(
+                packet.get(), nextSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            ESP_LOGI(TAG, "heap_caps_realloc() << success=%d", int(resized != nullptr));
+            if (resized == nullptr)
+            {
+                // 原缓冲在 realloc 失败时仍归 RAII 持有；退出并归还当前相机帧。
+                result = ESP_ERR_NO_MEM;
+                ESP_LOGE(TAG, "onStream() << result=TX_BUFFER_NO_MEMORY bytes=%u", unsigned(nextSize));
+                break;
+            }
+            packet.release();
+            packet.reset(resized);
+            capacity = nextSize;
+        }
+        std::memcpy(packet.get(), header, length);
+        std::memcpy(packet.get() + length, frame->buf, jpegBytes);
+        packet.get()[length + jpegBytes] = '\r';
+        packet.get()[length + jpegBytes + 1] = '\n';
+        // 网络发送只使用独立副本，提前归还采集帧，使两个缓冲能够继续按原节拍采集。
+        holder.reset();
         // 网络发送不持有传感器锁，慢速客户端不会阻止网页调节参数。
         const int64_t sendStart = esp_timer_get_time();
-        const char* stage = "frame_header";
+        const char* stage = "frame_packet";
         errno = 0;
-        result = httpd_resp_send_chunk(req, header, length);
-        if (result == ESP_OK)
-        {
-            stage = "jpeg_data";
-            result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(frame->buf), frame->len);
-        }
-        if (result == ESP_OK)
-        {
-            stage = "frame_tail";
-            result = httpd_resp_send_chunk(req, "\r\n", 2);
-        }
+        result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(packet.get()), needed);
         if (result != ESP_OK)
         {
             // 必须先保存 errno，再查询无线状态，避免后续接口覆盖原始发送错误。
@@ -997,7 +1421,7 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             const int64_t sendUs = esp_timer_get_time() - sendStart;
             ESP_LOGW(TAG, "视频发送失败 stage=%s result=%s errno=%d completed_frames=%u bytes=%u send_ms=%lld",
                      stage, esp_err_to_name(result), sendErrno, totalFrames,
-                     unsigned(frame->len), (long long)(sendUs / 1000));
+                     unsigned(jpegBytes), (long long)(sendUs / 1000));
 #if CONFIG_CAMERA_WIFI_AP
             // AP 没有上游路由器信号强度；改为记录热点状态及当前接入设备数量。
             wifi_sta_list_t clients = {};
@@ -1020,9 +1444,6 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
 #endif
             break;
         }
-        // 单缓冲必须在统计状态加锁前归还，避免拍照任务持锁等帧时互相等待。
-        // 此处之后不再读取 frame，防止缓冲被后续采集覆盖时仍访问旧内容。
-        holder.reset();
         if (totalFrames == 0)
         {
             ESP_LOGI(TAG, "首帧发送完成 send_ms=%lld",
@@ -1043,6 +1464,7 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         {
             std::lock_guard<std::mutex> lock(app->m_mutex);
             app->m_actualFps = frames * 1000000.0 / (now - window);
+            app->cacheStatus();
             frames = 0;
             window = now;
         }
