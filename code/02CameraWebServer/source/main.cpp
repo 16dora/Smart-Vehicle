@@ -1,10 +1,10 @@
 #include "camera_web.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #if CONFIG_CAMERA_PERF_TEST
 #include <cstring>
 #include <vector>
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #endif
 
 // 输入：无；输出：无；作用：启动服务，失败时保持串口可见且不启动后续业务。
@@ -17,6 +17,8 @@ extern "C" void app_main(void)
         ESP_LOGE("camera_main", "start() << result=%s", esp_err_to_name(result));
         return;
     }
+    // 复用原有主任务，首轮建立基线；后续采样不经过相机锁或 HTTP 请求队列。
+    CameraWeb::instance().updateRuntime();
 #if CONFIG_CAMERA_PERF_TEST
     // 微秒时钟下比较相邻五秒窗口；每个 CPU 的空闲时间分别按墙钟时间计算。
     std::vector<TaskStatus_t> previous(40);
@@ -27,6 +29,7 @@ extern "C" void app_main(void)
     {
         // 主任务阻塞五秒，仅记录汇总值，避免逐帧日志本身拖慢服务。
         vTaskDelay(pdMS_TO_TICKS(5000));
+        CameraWeb::instance().updateRuntime();
         const UBaseType_t count = uxTaskGetSystemState(current.data(), current.size(), nullptr);
         const int64_t currentUs = esp_timer_get_time();
         double idle0 = 0;
@@ -80,6 +83,13 @@ extern "C" void app_main(void)
         previous.swap(current);
         prevCount = count;
         previousUs = currentUs;
+    }
+#else
+    // 主任务每两秒采样一次并阻塞让出 CPU，不新增任务或网页轮询连接。
+    while (true)
+    {
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        CameraWeb::instance().updateRuntime();
     }
 #endif
 }

@@ -20,6 +20,8 @@
     #message{min-height:24px;font-size:13px;color:#8fcbff;margin-top:14px}#message.error{color:#ffb4ab}.badge{font-size:12px;border:1px solid #425672;padding:7px 12px;border-radius:30px;color:#b6d9f8}
     fieldset{padding:0;border:0;margin:0;min-width:0}[hidden]{display:none!important}
     .drive{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.drive h2{margin-bottom:8px}
+    .runtime{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.runtime h2{margin-bottom:14px}
+    .runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px}.runtime .number{font-size:20px}
     .drive-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:400px;margin:16px auto 8px}
     .drive-turn{display:flex;gap:8px;max-width:400px;margin:auto}.drive-turn button{flex:1}
     [data-drive]{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
@@ -52,6 +54,22 @@
       </div>
       <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
       <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
+      <section class="runtime" aria-label="设备运行状态">
+        <h2>设备运行状态</h2>
+        <div class="runtime-grid">
+          <div><div class="muted">CPU0 忙碌率（估算）</div><span class="number" id="cpu0Busy">--</span> <span class="unit">%</span></div>
+          <div><div class="muted">CPU1 忙碌率（估算）</div><span class="number" id="cpu1Busy">--</span> <span class="unit">%</span></div>
+          <div><div class="muted">CPU 当前频率</div><span class="number" id="cpuMhz">--</span> <span class="unit">MHz</span></div>
+          <div><div class="muted">内部可用堆</div><span class="number" id="internalFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted">PSRAM 可用堆</div><span class="number" id="psramFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted" id="rssiLabel">Wi-Fi 信号</div><span class="number" id="wifiRssi">--</span> <span class="unit">dBm</span></div>
+          <div><div class="muted">视频有效载荷发送速率</div><span class="number" id="videoRate">--</span> <span class="unit">KB/s</span><div class="muted"><span id="videoMbps">--</span> Mbps</div></div>
+          <div><div class="muted">已完成帧平均取帧等待</div><span class="number" id="captureMs">--</span> <span class="unit">ms</span></div>
+          <div><div class="muted">已完成帧平均发送耗时</div><span class="number" id="sendMs">--</span> <span class="unit">ms</span></div>
+        </div>
+        <p class="muted" id="runtimeHint" role="status">等待统计采样，首轮 CPU 只建立基线。</p>
+        <p class="muted">常规约每 2 秒采样。速率统计完整提交的 JPEG，不含协议开销和重传；不代表浏览器已接收或显示。取帧等待不等于传感器积分时间。</p>
+      </section>
       <div class="drive">
         <h2>车辆控制 <span class="badge" id="motorState">等待设备状态</span></h2>
         <p class="muted">按住方向键行驶，松手停车。首次使用请架空车轮核对方向；速度表示 PWM 占空比，不是实测轮速。</p>
@@ -220,6 +238,39 @@ function updateExposure(state, sync = false) {
     (state.line_us / 1000).toFixed(3) + ' ms 为单位取整。';
 }
 
+// 输入：设备状态或空值；输出：无；作用：显示运行采样，过期或失败时不保留旧的负载与速率。
+function updateRuntime(state) {
+  const runtime = state && state.runtime;
+  const isFresh = runtime && state.runtime_age_ms >= 0 && state.runtime_age_ms <= 10000 &&
+    Number.isFinite(runtime.cpu_mhz);
+  const ids = ['cpu0Busy', 'cpu1Busy', 'cpuMhz', 'internalFree', 'psramFree',
+    'wifiRssi', 'videoRate', 'videoMbps', 'captureMs', 'sendMs'];
+  if (!isFresh) {
+    // 初始化、请求失败或采样超过十秒都明确显示不可用，下一次有效轮询会恢复。
+    for (const id of ids) document.getElementById(id).textContent = '--';
+    document.getElementById('runtimeHint').textContent = '运行统计暂不可用，等待新的设备采样。';
+    return;
+  }
+  document.getElementById('cpu0Busy').textContent = runtime.cpu_valid ? runtime.cpu0_pct.toFixed(1) : '--';
+  document.getElementById('cpu1Busy').textContent = runtime.cpu_valid ? runtime.cpu1_pct.toFixed(1) : '--';
+  document.getElementById('cpuMhz').textContent = runtime.cpu_mhz.toFixed(0);
+  document.getElementById('internalFree').textContent = (runtime.internal_free / 1024).toFixed(1);
+  document.getElementById('psramFree').textContent = (runtime.psram_free / 1024).toFixed(1);
+  document.getElementById('rssiLabel').textContent = runtime.wifi_mode === 'ap' ? 'AP 最弱客户端信号' : '路由器信号';
+  document.getElementById('wifiRssi').textContent = runtime.rssi_valid ? String(runtime.rssi_dbm) : '--';
+  const hasWindow = runtime.window_ms > 0;
+  document.getElementById('videoRate').textContent = hasWindow ? (runtime.video_Bps / 1000).toFixed(1) : '--';
+  document.getElementById('videoMbps').textContent = hasWindow ? (runtime.video_Bps * 8 / 1000000).toFixed(3) : '--';
+  // 没有完成帧时吞吐为零，但平均耗时没有样本，不能显示成零毫秒。
+  document.getElementById('captureMs').textContent = runtime.frames > 0 ? runtime.capture_ms.toFixed(1) : '--';
+  document.getElementById('sendMs').textContent = runtime.frames > 0 ? runtime.send_ms.toFixed(1) : '--';
+  document.getElementById('runtimeHint').textContent =
+    (state.video_active ? '预览处理中；' : '当前未预览；') + '近 ' + (runtime.window_ms / 1000).toFixed(1) +
+    ' 秒完成 ' + runtime.frames + ' 帧；采样于 ' + (state.runtime_age_ms / 1000).toFixed(1) + ' 秒前。' +
+    (runtime.wifi_mode === 'ap' && runtime.ap_clients >= 0 ? '热点接入 ' + runtime.ap_clients + ' 台。' : '') +
+    (runtime.cpu_valid ? '' : 'CPU 忙碌率等待有效采样窗口。');
+}
+
 // 输入：控件事件；输出：无；作用：拖动滑块时仅显示本地值，不连续发送请求。
 function updateValue(event) {
   if (event.target.id === 'exposure_ms' || event.target.id === 'exposureSlider') {
@@ -282,6 +333,7 @@ async function pollStatus() {
     const state = JSON.parse(await request('/status'));
     // 设置提交期间，旧轮询响应不覆盖页面中的最新操作结果。
     if (saving || version !== settingsVersion) return;
+    updateRuntime(state);
     updateExposure(state);
     document.getElementById('actualFps').textContent = state.actual_fps.toFixed(1);
     document.getElementById('limitFps').textContent = state.max_fps;
@@ -296,6 +348,7 @@ async function pollStatus() {
   } catch (error) {
     // 设置成功后，旧轮询的迟到失败也不能禁用已经恢复的控件。
     if (saving || version !== settingsVersion) return;
+    updateRuntime(null);
     document.getElementById('connection').textContent = error.kind === 'timeout' ? '设备响应超时' : '状态读取失败';
     showMessage(describeError(error), true);
     initialized = false;
@@ -328,6 +381,7 @@ async function changeSetting(event) {
     });
     const state = JSON.parse(response);
     updateControls(state);
+    updateRuntime(state);
     document.getElementById('limitFps').textContent = state.max_fps;
     showMessage('设置已生效。');
   } catch (error) {

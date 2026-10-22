@@ -17,6 +17,8 @@ public:
     static CameraWeb& instance();
     // 输入：无；输出：初始化结果；作用：启动相机、网页与选定模式的 Wi-Fi。
     esp_err_t start();
+    // 输入：无；输出：无；作用：由主任务低频采样 CPU、内存、无线信号及视频累计量。
+    void updateRuntime();
     CameraWeb(const CameraWeb&) = delete;
     CameraWeb& operator=(const CameraWeb&) = delete;
 
@@ -79,10 +81,32 @@ private:
 
     // 保护相机采集、传感器设置及运行统计，网络发送不持有此锁。
     mutable std::mutex m_mutex;
-    // 只保护相机 JSON 快照，不在持有此锁时取帧或等待网络。
+    // 保护相机/运行状态快照和视频累计量；持锁期间不取帧、不访问外设、不发送网络。
     mutable std::mutex m_statusMutex;
     // 缓存相机字段，发送时追加实时网络、电机字段及结束括号；空串表示相机不可用。
     std::array<char, 512> m_statusJson{};
+    // 主任务发布的运行状态 JSON；状态请求直接复制，不等待相机或统计采样。
+    std::array<char, 512> m_runtimeJson{};
+    // 以下四项由快照锁保护；仅完整提交 HTTP 的 JPEG 帧计入累计量，跨连接不清零。
+    // 成功提交的 JPEG 有效载荷总字节数，不包含 HTTP 头和链路重传。
+    uint64_t m_videoBytes = 0;
+    // 成功提交的完整 JPEG 帧数。
+    uint64_t m_videoFrames = 0;
+    // 已完成发送帧的取帧等待累计耗时，单位微秒。
+    uint64_t m_captureUs = 0;
+    // 已完成发送帧的 HTTP 提交累计耗时，单位微秒。
+    uint64_t m_sendUs = 0;
+    // 视频连接是否处于有效处理阶段，由视频任务在快照锁内更新。
+    bool m_isVideoActive = false;
+    // 最近运行快照的单调时间，单位微秒；由快照锁保护，零表示尚未采样。
+    int64_t m_runtimeAtUs = 0;
+    // 以下三项仅由主任务访问，不与视频或 HTTP 任务共享。
+    // 上次 CPU 采样的单调时间，单位微秒；第一轮只建立计数基线。
+    int64_t m_cpuAtUs = 0;
+    // 上次两个核心的空闲任务累计微秒数，使用无符号差值处理 32 位回绕。
+    std::array<uint32_t, 2> m_idleLast{};
+    // 上次视频窗口累计值，顺序为字节数、完整帧数、取帧微秒数、发送微秒数。
+    std::array<uint64_t, 4> m_videoLast{};
     // 以下曝光字段由相机锁保护；状态接口仅尝试取锁，视频忙时继续返回已发布快照。
     // 最近尝试读取曝光的单调时间，单位微秒；负初值保证启动时立即采样。
     int64_t m_expReadUs = -2000000;

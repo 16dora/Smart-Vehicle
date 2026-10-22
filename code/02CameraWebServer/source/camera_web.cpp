@@ -1035,6 +1035,127 @@ void CameraWeb::closeMotorSocket(httpd_handle_t server, int socketFd)
     ESP_LOGD(TAG, "close() << result=%d", result);
 }
 
+// 输入：无；输出：无；作用：采样系统状态并计算相邻窗口差值，视频阻塞时仍可发布 CPU 状态。
+void CameraWeb::updateRuntime()
+{
+    ESP_LOGI(TAG, "updateRuntime() >>");
+    std::array<double, 2> busyPct{};
+    bool isCpuValid = false;
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS && CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER && \
+    !CONFIG_FREERTOS_SMP && CONFIG_FREERTOS_NUMBER_OF_CORES == 2
+    std::array<uint32_t, 2> idleUs{};
+    // 每核仅取空闲累计量，不分配任务列表或长时间暂停调度。
+    for (int core = 0; core < 2; ++core)
+    {
+        ESP_LOGI(TAG, "ulTaskGetIdleRunTimeCounterForCore() >> core=%d", core);
+        idleUs[core] = static_cast<uint32_t>(ulTaskGetIdleRunTimeCounterForCore(core));
+        ESP_LOGI(TAG, "ulTaskGetIdleRunTimeCounterForCore() << core=%d idle_us=%lu",
+                 core, static_cast<unsigned long>(idleUs[core]));
+    }
+    const int64_t cpuNowUs = esp_timer_get_time();
+    const int64_t cpuElapsedUs = cpuNowUs - m_cpuAtUs;
+    // 首轮、过短窗口或间隔超过一次计数回绕时不伪造负载，下一轮重新建立有效差值。
+    if (m_cpuAtUs > 0 && cpuElapsedUs >= 1000000 && cpuElapsedUs < UINT32_MAX)
+    {
+        isCpuValid = true;
+        for (size_t core = 0; core < idleUs.size(); ++core)
+        {
+            const uint32_t deltaUs = idleUs[core] - m_idleLast[core];
+            // 计数在任务切换时结算，允许两个 tick 的边界误差；异常样本整轮显示不可用。
+            if (deltaUs > static_cast<uint64_t>(cpuElapsedUs + 2 * portTICK_PERIOD_MS * 1000))
+            {
+                isCpuValid = false;
+            }
+            busyPct[core] = std::clamp(100.0 - deltaUs * 100.0 / cpuElapsedUs, 0.0, 100.0);
+        }
+    }
+    m_idleLast = idleUs;
+    m_cpuAtUs = cpuNowUs;
+#endif
+    ESP_LOGI(TAG, "esp_rom_get_cpu_ticks_per_us() >>");
+    const unsigned cpuMhz = esp_rom_get_cpu_ticks_per_us();
+    ESP_LOGI(TAG, "esp_rom_get_cpu_ticks_per_us() << mhz=%u", cpuMhz);
+    ESP_LOGI(TAG, "heap_caps_get_free_size() >> caps=INTERNAL|8BIT");
+    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "heap_caps_get_free_size() << bytes=%u", unsigned(internalFree));
+    ESP_LOGI(TAG, "heap_caps_get_free_size() >> caps=SPIRAM|8BIT");
+    const size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ESP_LOGI(TAG, "heap_caps_get_free_size() << bytes=%u", unsigned(psramFree));
+    bool isRssiValid = false;
+    int rssiDbm = 0;
+    int apClients = -1;
+#if CONFIG_CAMERA_WIFI_AP
+    const char* wifiMode = "ap";
+    wifi_sta_list_t clients{};
+    ESP_LOGI(TAG, "esp_wifi_ap_get_sta_list() >>");
+    const esp_err_t wifiResult = esp_wifi_ap_get_sta_list(&clients);
+    ESP_LOGI(TAG, "esp_wifi_ap_get_sta_list() << result=%s clients=%d",
+             esp_err_to_name(wifiResult), wifiResult == ESP_OK ? clients.num : -1);
+    if (wifiResult == ESP_OK)
+    {
+        // 热点没有上游路由器 RSSI；显示已关联客户端中的最弱信号，未接入时标记不可用。
+        apClients = clients.num;
+        for (int index = 0; index < clients.num; ++index)
+        {
+            if (!isRssiValid || clients.sta[index].rssi < rssiDbm)
+            {
+                rssiDbm = clients.sta[index].rssi;
+            }
+            isRssiValid = true;
+        }
+    }
+#else
+    const char* wifiMode = "sta";
+    wifi_ap_record_t access{};
+    ESP_LOGI(TAG, "esp_wifi_sta_get_ap_info() >>");
+    const esp_err_t wifiResult = esp_wifi_sta_get_ap_info(&access);
+    ESP_LOGI(TAG, "esp_wifi_sta_get_ap_info() << result=%s rssi_dbm=%d",
+             esp_err_to_name(wifiResult), wifiResult == ESP_OK ? access.rssi : 0);
+    if (wifiResult == ESP_OK)
+    {
+        rssiDbm = access.rssi;
+        isRssiValid = true;
+    }
+#endif
+    double bytesPerSec = 0;
+    double captureMs = 0;
+    double sendMs = 0;
+    uint64_t frames = 0;
+    int64_t elapsedUs = 0;
+    {
+        // SDK 采样完成后才短暂取快照锁；视频只在完整一帧提交后更新四个累计量。
+        std::lock_guard<std::mutex> lock(m_statusMutex);
+        const int64_t videoNowUs = esp_timer_get_time();
+        elapsedUs = m_runtimeAtUs == 0 ? 0 : videoNowUs - m_runtimeAtUs;
+        const std::array<uint64_t, 4> totals{m_videoBytes, m_videoFrames, m_captureUs, m_sendUs};
+        if (elapsedUs > 0)
+        {
+            // 窗口包含没有发送的时间，长时间没有完整帧时速率归零，不沿用旧的高吞吐值。
+            frames = totals[1] - m_videoLast[1];
+            bytesPerSec = (totals[0] - m_videoLast[0]) * 1000000.0 / elapsedUs;
+            if (frames > 0)
+            {
+                captureMs = (totals[2] - m_videoLast[2]) / (1000.0 * frames);
+                sendMs = (totals[3] - m_videoLast[3]) / (1000.0 * frames);
+            }
+        }
+        m_videoLast = totals;
+        m_runtimeAtUs = videoNowUs;
+        std::snprintf(m_runtimeJson.data(), m_runtimeJson.size(),
+            "{\"cpu_valid\":%s,\"cpu_mhz\":%u,\"cpu0_pct\":%.1f,\"cpu1_pct\":%.1f,"
+            "\"internal_free\":%u,\"psram_free\":%u,\"wifi_mode\":\"%s\",\"rssi_valid\":%s,"
+            "\"rssi_dbm\":%d,\"ap_clients\":%d,\"video_Bps\":%.1f,\"frames\":%llu,"
+            "\"capture_ms\":%.3f,\"send_ms\":%.3f,\"window_ms\":%lld}",
+            isCpuValid ? "true" : "false", cpuMhz, busyPct[0], busyPct[1],
+            unsigned(internalFree), unsigned(psramFree), wifiMode, isRssiValid ? "true" : "false",
+            rssiDbm, apClients, bytesPerSec, static_cast<unsigned long long>(frames),
+            captureMs, sendMs, static_cast<long long>(elapsedUs / 1000));
+    }
+    ESP_LOGI(TAG, "updateRuntime() << cpu_valid=%d cpu0_pct=%.1f cpu1_pct=%.1f video_Bps=%.1f frames=%llu window_ms=%lld",
+             int(isCpuValid), busyPct[0], busyPct[1], bytesPerSec,
+             static_cast<unsigned long long>(frames), static_cast<long long>(elapsedUs / 1000));
+}
+
 // 输入：传感器；输出：读取是否有效；作用：采集当前快门、额外行与行时序，发布前检查读数一致性。
 bool CameraWeb::readExposure(sensor_t* sensor)
 {
@@ -1253,13 +1374,19 @@ esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
             cacheStatus();
         }
     }
-    char json[1024];
+    char json[1536];
     std::array<char, 512> cached;
+    std::array<char, 512> runtime;
+    bool isVideoActive;
+    int64_t runtimeAgeMs;
     // 只读已发布快照；相机取帧即使等待四秒，也不会阻塞本次状态读取。
     const MotorState motor = m_motor.getState();
     {
         std::lock_guard<std::mutex> lock(m_statusMutex);
         cached = m_statusJson;
+        runtime = m_runtimeJson;
+        isVideoActive = m_isVideoActive;
+        runtimeAgeMs = m_runtimeAtUs == 0 ? -1 : (esp_timer_get_time() - m_runtimeAtUs) / 1000;
     }
     if (cached[0] == '\0')
     {
@@ -1267,9 +1394,12 @@ esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not ready");
     }
     std::snprintf(json, sizeof(json),
-        "%s,\"connected\":%s,\"motor\":{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,"
+        "%s,\"connected\":%s,\"runtime\":%s,\"runtime_age_ms\":%lld,\"video_active\":%s,"
+        "\"motor\":{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,"
         "\"generation\":%lu,\"forward\":%d,\"right\":%d,\"turn\":%d,\"wheels\":[%d,%d,%d,%d]}}",
         cached.data(), m_connected.load() ? "true" : "false",
+        runtime[0] == '\0' ? "{}" : runtime.data(), static_cast<long long>(runtimeAgeMs),
+        isVideoActive ? "true" : "false",
         motor.enabled ? "true" : "false", motor.ready ? "true" : "false", motor.moving ? "true" : "false",
         motor.fault, static_cast<unsigned long>(motor.generation), motor.forward, motor.right, motor.turn,
         motor.wheels[0], motor.wheels[1], motor.wheels[2], motor.wheels[3]);
@@ -1532,6 +1662,11 @@ void CameraWeb::finishStream()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_streaming = false;
     m_actualFps = 0;
+    {
+        // 只清理活动标志，累计字节跨连接保留，主任务继续正确计算相邻窗口差值。
+        std::lock_guard<std::mutex> statusLock(m_statusMutex);
+        m_isVideoActive = false;
+    }
     cacheStatus();
 }
 
@@ -1583,6 +1718,11 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             {
                 // 只在开始时发布状态，不为每一帧重复格式化 JSON。
                 app->m_streaming = true;
+                {
+                    // 运行统计不用相机锁读取活动状态，发送阻塞时 CPU 采样仍可继续。
+                    std::lock_guard<std::mutex> statusLock(app->m_statusMutex);
+                    app->m_isVideoActive = true;
+                }
                 app->cacheStatus();
             }
             captureStart = esp_timer_get_time();
@@ -1644,10 +1784,13 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         const char* stage = "frame_packet";
         errno = 0;
         result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(packet.get()), needed);
+        // 返回后立即计时并保存 errno，避免首帧日志或状态查询污染发送耗时和错误信息。
+        const int sendError = errno;
+        const int64_t sentUs = esp_timer_get_time() - sendStart;
         if (result != ESP_OK)
         {
             // 必须先保存 errno，再查询无线状态，避免后续接口覆盖原始发送错误。
-            const int sendErrno = errno;
+            const int sendErrno = sendError;
             const int64_t sendUs = esp_timer_get_time() - sendStart;
             ESP_LOGW(TAG, "视频发送失败 stage=%s result=%s errno=%d completed_frames=%u bytes=%u send_ms=%lld",
                      stage, esp_err_to_name(result), sendErrno, totalFrames,
@@ -1681,6 +1824,14 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         }
         ++totalFrames;
         const int64_t now = esp_timer_get_time();
+        {
+            // 每完整提交一帧只累加数值，不格式化 JSON 或额外打印逐帧日志。
+            std::lock_guard<std::mutex> lock(app->m_statusMutex);
+            app->m_videoBytes += jpegBytes;
+            ++app->m_videoFrames;
+            app->m_captureUs += captureUs;
+            app->m_sendUs += sentUs;
+        }
         if (window == 0)
         {
             // 以第一帧完成时间为起点，只统计之后的帧间隔，避免首个窗口多算一帧。
