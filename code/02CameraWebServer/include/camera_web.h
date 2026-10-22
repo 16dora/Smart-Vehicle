@@ -54,8 +54,14 @@ private:
     static esp_err_t onStream(httpd_req_t* req);
     // 输入：请求；输出：发送结果；作用：返回线程安全的参数及帧率快照。
     esp_err_t sendStatus(httpd_req_t* req);
-    // 输入：无；输出：无；作用：在相机锁内或启动阶段发布快照，查询不再等待取帧。
+    // 输入：无；输出：无；作用：在相机锁内发布快照，常规曝光采样间隔至少两秒。
     void cacheStatus();
+    // 输入：已初始化的传感器；输出：读取是否有效；作用：读取硬件曝光及行时序，不依赖驱动缓存。
+    bool readExposure(sensor_t* sensor);
+    // 输入：传感器和自动模式；输出：切换是否成功；作用：冻结当前曝光或恢复自动曝光。
+    bool setAutoExposure(sensor_t* sensor, bool enabled);
+    // 输入：传感器和总曝光行数；输出：写入是否成功；作用：手动设置快门及额外曝光行。
+    bool setExposure(sensor_t* sensor, int lines);
 #if CONFIG_CAMERA_PERF_TEST
     // 输入：含 camera=off/on 的测试请求；输出：发送结果；作用：对比相机开关前后的固定数据传输。
     esp_err_t sendPerf(httpd_req_t* req);
@@ -77,6 +83,27 @@ private:
     mutable std::mutex m_statusMutex;
     // 缓存相机字段，发送时追加实时网络、电机字段及结束括号；空串表示相机不可用。
     std::array<char, 512> m_statusJson{};
+    // 以下曝光字段由相机锁保护；状态接口仅尝试取锁，视频忙时继续返回已发布快照。
+    // 最近尝试读取曝光的单调时间，单位微秒；负初值保证启动时立即采样。
+    int64_t m_expReadUs = -2000000;
+    // 根据 OV2640 行宽、时钟分频和倍频换算的行周期估算值，单位微秒。
+    double m_lineUs = 0;
+    // 最近硬件快门的有效行数，不包括额外曝光行。
+    int m_expLines = 0;
+    // VSYNC 前增加的曝光行数，与快门行数共同决定积分时间。
+    int m_extraLines = 0;
+    // 当前模式及帧长度允许的手动快门上限，同时受驱动 1200 行限制。
+    int m_maxShutter = 0;
+    // 当前手动调节周期的总行数上限；缩短曝光不反复缩小输入范围。
+    int m_expMaxLines = 0;
+    // 最近成功读取的硬件自动曝光状态，启动保持驱动默认自动模式。
+    bool m_isAutoExposure = true;
+    // 曝光寄存器和时序是否读取成功；无效时界面不显示历史值为当前值。
+    bool m_isExposureValid = false;
+    // 自动模式原有的 DSP 曝光使能位，恢复自动曝光时原样恢复。
+    int m_autoDsp = 0;
+    // 自动模式原有的夜间额外帧设置，手动模式冻结，恢复时原样恢复。
+    int m_autoFrames = 0;
     // 独立持锁并维护超时停车任务，相机采集和视频发送不持有电机锁。
     MotorControl m_motor;
     // 控制端口服务器，生命周期与固件一致。

@@ -4,6 +4,9 @@
 #include "wifi_credentials.local.h"
 #endif
 #include <cerrno>
+#include <algorithm>
+#include <cmath>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1032,32 +1035,224 @@ void CameraWeb::closeMotorSocket(httpd_handle_t server, int socketFd)
     ESP_LOGD(TAG, "close() << result=%d", result);
 }
 
+// 输入：传感器；输出：读取是否有效；作用：采集当前快门、额外行与行时序，发布前检查读数一致性。
+bool CameraWeb::readExposure(sensor_t* sensor)
+{
+    ESP_LOGI(TAG, "readExposure() >>");
+    m_expReadUs = esp_timer_get_time();
+    m_isExposureValid = false;
+    // 顺序依次为 PID、模式、时钟、水平补偿、帧长度、AEC、快门、额外行及复读校验。
+    const int regs[] = {0x10a, 0x112, 0x111, 0x12a, 0x12b, 0x146, 0x147,
+                        0x113, 0x145, 0x110, 0x104, 0x12e, 0x12d,
+                        0x145, 0x110, 0x12e, 0x103, 0x0c2};
+    int values[std::size(regs)]{};
+    // 常规采样每两秒一轮，设置操作可立即回读；任一显式失败退出，等待下一轮或用户重试。
+    for (size_t index = 0; index < std::size(regs); ++index)
+    {
+        ESP_LOGI(TAG, "sensor get_reg() >> reg=0x%03x mask=0xff", regs[index]);
+        values[index] = sensor->get_reg(sensor, regs[index], 0xff);
+        ESP_LOGI(TAG, "sensor get_reg() << reg=0x%03x value=%d", regs[index], values[index]);
+        if (values[index] < 0 || values[index] > 255)
+        {
+            ESP_LOGW(TAG, "readExposure() << result=READ_FAILED");
+            return false;
+        }
+    }
+    // 底层 SCCB 失败可能返回零；PID 检查防止将全零读数发布成有效的零曝光。
+    // AEC 自动更新时复读高位与中位，避免跨进位拼出不存在的快门或额外行数。
+    if (values[0] != 0x26 || (values[8] & 0x3f) != (values[13] & 0x3f) ||
+        values[9] != values[14] || values[11] != values[15])
+    {
+        ESP_LOGW(TAG, "readExposure() << result=INVALID_OR_CHANGING_REGISTERS");
+        return false;
+    }
+    int rowClocks;
+    int frameLines;
+    // 根据传感器真实工作模式换算，不能用网页输出宽度或发送 FPS 代替行时序。
+    switch (values[1] & 0x70)
+    {
+        case 0x00: rowClocks = 1922; frameLines = 1248; break;
+        case 0x40: rowClocks = 1190; frameLines = 672; break;
+        case 0x20: rowClocks = 595; frameLines = 336; break;
+        default:
+            ESP_LOGW(TAG, "readExposure() << result=UNSUPPORTED_MODE");
+            return false;
+    }
+    const int dummyPixels = ((values[3] & 0xf0) << 4) | values[4];
+    const int dummyLines = (values[6] << 8) | values[5];
+    // JPEG 使用 YUV422 采集链路；参照 OpenMV OV2640 的时钟模型，结果明确作为估算值。
+    // DVP 分频只控制 DSP 输出，不作为传感器积分时钟；不能使用 JPEG 网络发送耗时换算。
+    const double clockHz = double(sensor->xclk_freq_hz) * 3 * ((values[2] & 0x80) ? 2 : 1) /
+                           ((values[2] & 0x3f) + 2);
+    if (clockHz <= 0 || sensor->pixformat != PIXFORMAT_JPEG)
+    {
+        ESP_LOGW(TAG, "readExposure() << result=UNSUPPORTED_CLOCK_OR_FORMAT");
+        return false;
+    }
+    m_lineUs = (rowClocks + dummyPixels) * 2.0 * 1000000 / clockHz;
+    const int shutter = ((values[8] & 0x3f) << 10) | (values[9] << 2) | (values[10] & 3);
+    // 数据手册规定快门最长一帧；额外曝光行另计，不能遗漏低照度下增加的积分时间。
+    m_expLines = std::min(shutter, frameLines + dummyLines);
+    m_extraLines = (values[11] << 8) | values[12];
+    m_maxShutter = std::min(1200, frameLines + dummyLines);
+    m_isAutoExposure = (values[7] & 1) != 0;
+    if (m_isAutoExposure)
+    {
+        // 手动模式只冻结自动控制，不改动 AGC；保存自动模式设置供用户重新开启时恢复。
+        m_autoDsp = values[17] & 0x80;
+        m_autoFrames = values[16] & 0xc0;
+    }
+    if (m_isAutoExposure || m_expMaxLines == 0)
+    {
+        // 额外曝光寄存器只有 16 位，输入范围不得超过驱动快门与额外行的可写总量。
+        m_expMaxLines = std::min(m_maxShutter + 65535, std::max(m_maxShutter, m_expLines + m_extraLines));
+    }
+    sensor->status.aec = m_isAutoExposure ? 1 : 0;
+    m_isExposureValid = true;
+    ESP_LOGI(TAG, "readExposure() << result=OK auto=%d shutter=%d extra=%d line_us=%.3f exposure_ms=%.3f",
+             int(m_isAutoExposure), m_expLines, m_extraLines, m_lineUs,
+             (m_expLines + m_extraLines) * m_lineUs / 1000);
+    return true;
+}
+
+// 输入：传感器与总行数；输出：是否成功；作用：写入手动积分量，短曝光时清除历史额外行。
+bool CameraWeb::setExposure(sensor_t* sensor, int lines)
+{
+    ESP_LOGI(TAG, "setExposure() >> lines=%d", lines);
+    if (!m_isExposureValid || m_isAutoExposure || lines < 1 || lines > m_expMaxLines)
+    {
+        // 自动模式拒绝手动值，避免下一帧被 AEC 覆盖后界面却提示成功。
+        ESP_LOGW(TAG, "setExposure() << result=INVALID_STATE_OR_RANGE");
+        return false;
+    }
+    const int shutter = std::min(lines, m_maxShutter);
+    const int extra = lines - shutter;
+    ESP_LOGI(TAG, "sensor set_aec_value() >> value=%d", shutter);
+    int result = sensor->set_aec_value(sensor, shutter);
+    ESP_LOGI(TAG, "sensor set_aec_value() << result=%d", result);
+    // 额外行与快门共同控制积分；不足一帧时写零，保证可以从较长曝光调回短曝光。
+    for (int index = 0; index < 2 && result == 0; ++index)
+    {
+        const int reg = 0x12d + index;
+        const int value = (extra >> (index * 8)) & 0xff;
+        ESP_LOGI(TAG, "sensor set_reg() >> reg=0x%03x mask=0xff value=%d", reg, value);
+        result = sensor->set_reg(sensor, reg, 0xff, value);
+        ESP_LOGI(TAG, "sensor set_reg() << reg=0x%03x result=%d", reg, result);
+    }
+    // 写入失败后也尝试回读实际值，不能继续把用户目标值显示成已生效值。
+    const bool hasReadback = readExposure(sensor);
+    const bool applied = result == 0 && hasReadback && m_expLines + m_extraLines == lines;
+    if (!applied)
+    {
+        ESP_LOGW(TAG, "setExposure() << result=WRITE_OR_READBACK_FAILED");
+        return false;
+    }
+    ESP_LOGI(TAG, "setExposure() << result=OK");
+    return true;
+}
+
+// 输入：传感器和自动模式；输出：是否成功；作用：关闭时直接冻结当前寄存器，不写入历史默认曝光。
+bool CameraWeb::setAutoExposure(sensor_t* sensor, bool enabled)
+{
+    ESP_LOGI(TAG, "setAutoExposure() >> enabled=%d", int(enabled));
+    if (!readExposure(sensor))
+    {
+        ESP_LOGW(TAG, "setAutoExposure() << result=READ_FAILED");
+        return false;
+    }
+    const bool wasAuto = m_isAutoExposure;
+    if (enabled && wasAuto)
+    {
+        ESP_LOGI(TAG, "setAutoExposure() << result=UNCHANGED");
+        return true;
+    }
+    // 先关闭 AEC 再冻结额外帧；开启时最后恢复 AEC，避免中间状态修改曝光。
+    int result = 0;
+    if (!enabled)
+    {
+        ESP_LOGI(TAG, "sensor set_exposure_ctrl() >> enabled=0");
+        result = sensor->set_exposure_ctrl(sensor, 0);
+        ESP_LOGI(TAG, "sensor set_exposure_ctrl() << result=%d", result);
+    }
+    const int regs[] = {0x0c2, 0x103};
+    const int masks[] = {0x80, 0xc0};
+    const int values[] = {enabled ? m_autoDsp : 0, enabled ? m_autoFrames : 0};
+    // 仅修改曝光自动控制位，保留图像格式、窗口以及自动增益相关位。
+    for (size_t index = 0; index < std::size(regs) && result == 0; ++index)
+    {
+        ESP_LOGI(TAG, "sensor set_reg() >> reg=0x%03x mask=0x%x value=%d",
+                 regs[index], masks[index], values[index]);
+        result = sensor->set_reg(sensor, regs[index], masks[index], values[index]);
+        ESP_LOGI(TAG, "sensor set_reg() << reg=0x%03x result=%d", regs[index], result);
+    }
+    if (enabled && result == 0)
+    {
+        ESP_LOGI(TAG, "sensor set_exposure_ctrl() >> enabled=1");
+        result = sensor->set_exposure_ctrl(sensor, 1);
+        ESP_LOGI(TAG, "sensor set_exposure_ctrl() << result=%d", result);
+    }
+    if (wasAuto != enabled)
+    {
+        // 只在真正切换模式时重建范围；重复关闭自动曝光不缩小已建立的手动范围。
+        m_expMaxLines = 0;
+    }
+    const bool hasReadback = readExposure(sensor);
+    if (result != 0 || !hasReadback || m_isAutoExposure != enabled)
+    {
+        // 部分写入也回读并上报失败；下一次设置以硬件现状为准，不假设操作已回滚。
+        ESP_LOGW(TAG, "setAutoExposure() << result=WRITE_OR_READBACK_FAILED");
+        return false;
+    }
+    ESP_LOGI(TAG, "setAutoExposure() << result=OK");
+    return true;
+}
+
 // 输入：无；输出：无；作用：相机初始化、设置变更和帧率更新时发布小型状态快照。
 void CameraWeb::cacheStatus()
 {
     // 调用方已持有相机锁，或仍在单线程初始化阶段；这里只短暂持有快照锁。
     ESP_LOGI(TAG, "esp_camera_sensor_get() >> status_snapshot");
-    const sensor_t* sensor = esp_camera_sensor_get();
+    sensor_t* sensor = esp_camera_sensor_get();
     ESP_LOGI(TAG, "esp_camera_sensor_get() << ready=%d", int(sensor != nullptr));
-    std::lock_guard<std::mutex> lock(m_statusMutex);
     if (sensor == nullptr)
     {
         // 测量模式关闭相机时清空快照，不能把历史数据描述为当前有效参数。
+        std::lock_guard<std::mutex> lock(m_statusMutex);
         m_statusJson[0] = '\0';
         return;
     }
+    if (esp_timer_get_time() - m_expReadUs >= 2000000)
+    {
+        // 复用现有状态/帧率发布节拍；HTTP 网络发送和快照锁内不访问 SCCB。
+        readExposure(sensor);
+    }
     const auto& state = sensor->status;
+    std::lock_guard<std::mutex> lock(m_statusMutex);
     std::snprintf(m_statusJson.data(), m_statusJson.size(),
         "{\"size\":%d,\"quality\":%d,\"max_fps\":%d,\"actual_fps\":%.2f,"
         "\"brightness\":%d,\"contrast\":%d,\"saturation\":%d,"
-        "\"hmirror\":%d,\"vflip\":%d,\"streaming\":%s",
+        "\"hmirror\":%d,\"vflip\":%d,\"streaming\":%s,"
+        "\"auto_exposure\":%s,\"exposure_valid\":%s,\"exposure_us\":%lld,"
+        "\"exposure_min_us\":%lld,\"exposure_max_us\":%lld,\"line_us\":%.3f",
         m_size, state.quality, m_maxFps, m_actualFps,
         state.brightness, state.contrast, state.saturation, state.hmirror, state.vflip,
-        m_streaming ? "true" : "false");
+        m_streaming ? "true" : "false", m_isAutoExposure ? "true" : "false",
+        m_isExposureValid ? "true" : "false",
+        std::llround((m_expLines + m_extraLines) * m_lineUs),
+        static_cast<long long>(std::ceil(m_lineUs)),
+        static_cast<long long>(std::floor(m_expMaxLines * m_lineUs)), m_lineUs);
 }
 
 esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
 {
+    {
+        // 空闲时也刷新自动曝光；视频取帧占锁时立即使用快照，不让状态请求等待取帧。
+        std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
+        if (lock.owns_lock() && esp_timer_get_time() - m_expReadUs >= 2000000)
+        {
+            cacheStatus();
+        }
+    }
     char json[1024];
     std::array<char, 512> cached;
     // 只读已发布快照；相机取帧即使等待四秒，也不会阻塞本次状态读取。
@@ -1211,7 +1406,7 @@ esp_err_t CameraWeb::setControl(httpd_req_t* req)
     char* end = nullptr;
     errno = 0;
     const long value = std::strtol(text, &end, 10);
-    if (errno != 0 || end == text || *end != '\0' || value < -2 || value > 63)
+    if (errno != 0 || end == text || *end != '\0' || value < INT_MIN || value > INT_MAX)
     {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid integer");
     }
@@ -1239,6 +1434,22 @@ bool CameraWeb::applySetting(const char* name, int value)
         // 测量模式可能主动停止相机，拒绝控制请求，避免访问已销毁的传感器对象。
         return false;
     }
+    if (std::strcmp(name, "auto_exposure") == 0)
+    {
+        // 只接受明确的布尔值，切换完成后以硬件回读为准。
+        return (value == 0 || value == 1) && setAutoExposure(sensor, value == 1);
+    }
+    if (std::strcmp(name, "exposure_us") == 0)
+    {
+        if (!readExposure(sensor) || m_isAutoExposure ||
+            value < std::ceil(m_lineUs) || value > std::floor(m_expMaxLines * m_lineUs))
+        {
+            // 接口以整数微秒接收；仅开放当前时序可表达的范围，不把错误值隐式夹紧。
+            return false;
+        }
+        const int lines = std::clamp(static_cast<int>(std::llround(value / m_lineUs)), 1, m_expMaxLines);
+        return setExposure(sensor, lines);
+    }
     if (std::strcmp(name, "max_fps") == 0)
     {
         if (value < 1 || value > 30)
@@ -1262,11 +1473,30 @@ bool CameraWeb::applySetting(const char* name, int value)
             case 5: size = FRAMESIZE_UXGA; break;
             default: return false;
         }
+        if (!readExposure(sensor))
+        {
+            // 保留手动曝光前先取得真实时序，避免根据历史快照进行单位转换。
+            return false;
+        }
+        const bool wasAuto = m_isAutoExposure;
+        const double keepUs = (m_expLines + m_extraLines) * m_lineUs;
         if (sensor->set_framesize(sensor, size) != 0 || applySensorClock(sensor) != ESP_OK)
         {
             return false;
         }
         m_size = value;
+        m_expMaxLines = 0;
+        if (!readExposure(sensor))
+        {
+            // 分辨率已经切换，状态仍发布真实模式，但曝光不可用时不再尝试写入寄存器。
+            return false;
+        }
+        if (!wasAuto)
+        {
+            // 手动模式尽量保持切换前的毫秒值；新模式范围不足时取最近的有效行数。
+            const int lines = std::clamp(static_cast<int>(std::llround(keepUs / m_lineUs)), 1, m_expMaxLines);
+            return setExposure(sensor, lines);
+        }
         return true;
     }
     if (std::strcmp(name, "quality") == 0)

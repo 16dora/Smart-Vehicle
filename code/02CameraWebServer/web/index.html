@@ -48,6 +48,7 @@
       <div class="metrics">
         <div><div class="muted">实际发送帧率</div><span class="number" id="actualFps">0.0</span> <span class="unit">FPS</span></div>
         <div><div class="muted">发送上限</div><span class="number" id="limitFps">10</span> <span class="unit">FPS</span></div>
+        <div><div class="muted">当前积分时间（估算）</div><span class="number" id="exposureTime">--</span> <span class="unit">ms</span></div>
       </div>
       <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
       <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
@@ -88,6 +89,15 @@
         <div class="field"><label for="quality">JPEG 压缩值 <output id="qualityValue">12</output></label>
           <input id="quality" data-setting type="range" min="10" max="63" value="12"><div class="muted">数值越小，画质越高、数据量越大</div></div>
         <div class="field"><label for="max_fps">最大帧率（1–30 FPS）</label><input id="max_fps" data-setting type="number" min="1" max="30" step="1" value="10"></div>
+        <label class="check"><input id="auto_exposure" data-setting type="checkbox" checked>自动曝光</label>
+        <div class="field">
+          <label for="exposure_ms">手动积分时间（ms）</label>
+          <input id="exposure_ms" data-setting type="number" min="0.001" max="1000" step="0.001" value="1" disabled>
+          <label for="exposureSlider" class="muted">拖动调节积分时间</label>
+          <input id="exposureSlider" type="range" min="0.001" max="1000" step="0.001" value="1" disabled>
+          <div class="muted" id="exposureHint">正在读取曝光参数…</div>
+          <div class="muted">毫秒值由曝光寄存器与传感器时序换算，约每 2 秒更新。自动增益仍保持开启，画面亮度可能继续调整。</div>
+        </div>
         <div class="field"><label for="brightness">亮度 <output id="brightnessValue">0</output></label><input id="brightness" data-setting type="range" min="-2" max="2" value="0"></div>
         <div class="field"><label for="contrast">对比度 <output id="contrastValue">0</output></label><input id="contrast" data-setting type="range" min="-2" max="2" value="0"></div>
         <div class="field"><label for="saturation">饱和度 <output id="saturationValue">0</output></label><input id="saturation" data-setting type="range" min="-2" max="2" value="0"></div>
@@ -113,6 +123,10 @@ let saving = false;
 let polling = false;
 // 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
 let previewing = false;
+// 输入尚未提交时，状态轮询仍更新实测显示，但不能覆盖用户正在调节的手动值。
+let exposureEditing = false;
+// 每次设置提交递增，丢弃该设置之前发起的状态请求，避免旧曝光模式覆盖新设置。
+let settingsVersion = 0;
 // 电机控件和状态独立于相机设置，不会因图像设置保存而重建运动连接。
 const motorSettings = document.getElementById('motorSettings');
 // 当前按住的单个按钮；多指触摸不能覆盖已持有的方向。
@@ -167,14 +181,54 @@ function showMessage(text, error = false) {
 // 输入：服务器状态；输出：无；作用：同步全部参数，失败时也可回滚控件。
 function updateControls(state) {
   for (const control of controls) {
+    // 手动曝光使用毫秒显示，设备接口使用整数微秒，单独完成范围与单位同步。
+    if (control.id === 'exposure_ms') continue;
     if (control.type === 'checkbox') control.checked = Boolean(state[control.id]);
     else control.value = state[control.id];
     updateValue({target: control});
   }
+  exposureEditing = false;
+  updateExposure(state, true);
+}
+
+// 输入：设备状态及是否覆盖输入；输出：无；作用：刷新曝光估算、模式和硬件允许范围。
+function updateExposure(state, sync = false) {
+  const input = document.getElementById('exposure_ms');
+  const slider = document.getElementById('exposureSlider');
+  const isValid = state.exposure_valid === true && Number.isFinite(state.exposure_us) &&
+    state.exposure_min_us > 0 && state.exposure_max_us >= state.exposure_min_us;
+  document.getElementById('exposureTime').textContent = isValid ? (state.exposure_us / 1000).toFixed(3) : '--';
+  document.getElementById('auto_exposure').checked = Boolean(state.auto_exposure);
+  input.disabled = slider.disabled = !isValid || Boolean(state.auto_exposure);
+  if (!isValid) {
+    // 无效样本不冒充当前曝光；自动开关仍可用，下次状态读取继续恢复。
+    document.getElementById('exposureHint').textContent = '曝光参数暂不可用，等待下次读取。';
+    return;
+  }
+  const low = state.exposure_min_us / 1000;
+  const high = state.exposure_max_us / 1000;
+  input.min = slider.min = low.toFixed(3);
+  input.max = slider.max = high.toFixed(3);
+  // 自动模式随硬件读数刷新；手动模式仅在初始化、提交成功或无人编辑时同步。
+  if (sync || state.auto_exposure || !exposureEditing) {
+    const value = Math.min(high, Math.max(low, state.exposure_us / 1000)).toFixed(3);
+    input.value = slider.value = value;
+  }
+  document.getElementById('exposureHint').textContent =
+    (state.auto_exposure ? '自动曝光已开启，关闭后可手动调节。' : '手动曝光已开启。') +
+    '范围 ' + low.toFixed(3) + '–' + high.toFixed(3) + ' ms；以一个行周期约 ' +
+    (state.line_us / 1000).toFixed(3) + ' ms 为单位取整。';
 }
 
 // 输入：控件事件；输出：无；作用：拖动滑块时仅显示本地值，不连续发送请求。
 function updateValue(event) {
+  if (event.target.id === 'exposure_ms' || event.target.id === 'exposureSlider') {
+    // 滑块和数值框只在本地联动，松开或确认输入后才提交一次设置。
+    const peer = event.target.id === 'exposure_ms' ? 'exposureSlider' : 'exposure_ms';
+    document.getElementById(peer).value = event.target.value;
+    exposureEditing = true;
+    return;
+  }
   const output = document.getElementById(event.target.id + 'Value');
   if (output) output.value = event.target.value;
 }
@@ -223,10 +277,12 @@ function request(path, options = {}) {
 async function pollStatus() {
   if (saving || polling) return;
   polling = true;
+  const version = settingsVersion;
   try {
     const state = JSON.parse(await request('/status'));
     // 设置提交期间，旧轮询响应不覆盖页面中的最新操作结果。
-    if (saving) return;
+    if (saving || version !== settingsVersion) return;
+    updateExposure(state);
     document.getElementById('actualFps').textContent = state.actual_fps.toFixed(1);
     document.getElementById('limitFps').textContent = state.max_fps;
     document.getElementById('connection').textContent = state.connected ? '设备在线' : '网络未连接';
@@ -238,7 +294,8 @@ async function pollStatus() {
       showMessage('已连接。可以开始预览或调整图像。');
     }
   } catch (error) {
-    if (saving) return;
+    // 设置成功后，旧轮询的迟到失败也不能禁用已经恢复的控件。
+    if (saving || version !== settingsVersion) return;
     document.getElementById('connection').textContent = error.kind === 'timeout' ? '设备响应超时' : '状态读取失败';
     showMessage(describeError(error), true);
     initialized = false;
@@ -252,17 +309,22 @@ async function pollStatus() {
 
 // 输入：设置控件事件；输出：无；作用：提交单项设置并以设备返回值为准。
 async function changeSetting(event) {
-  const control = event.target;
+  // 滑块复用毫秒数值框的校验与请求路径，不额外创建连续调节连接。
+  const control = event.target.id === 'exposureSlider' ? document.getElementById('exposure_ms') : event.target;
+  if (saving) return;
   if (!control.checkValidity()) {
     control.reportValidity();
     return;
   }
   saving = true;
+  ++settingsVersion;
   settings.disabled = true;
-  const value = control.type === 'checkbox' ? Number(control.checked) : control.value;
+  const name = control.id === 'exposure_ms' ? 'exposure_us' : control.id;
+  const value = control.id === 'exposure_ms' ? Math.round(Number(control.value) * 1000) :
+    control.type === 'checkbox' ? Number(control.checked) : control.value;
   try {
     const response = await request('/control', {
-      method: 'POST', body: new URLSearchParams({var: control.id, val: value})
+      method: 'POST', body: new URLSearchParams({var: name, val: value})
     });
     const state = JSON.parse(response);
     updateControls(state);
@@ -272,6 +334,7 @@ async function changeSetting(event) {
     showMessage('设置失败：' + describeError(error), true);
     // 服务拒绝设置后重新读取实际值，不能让页面停留在未生效的状态。
     initialized = false;
+    exposureEditing = false;
   } finally {
     saving = false;
     settings.disabled = !initialized;
@@ -654,6 +717,8 @@ for (const control of controls) {
   control.addEventListener('input', updateValue);
   control.addEventListener('change', changeSetting);
 }
+document.getElementById('exposureSlider').addEventListener('input', updateValue);
+document.getElementById('exposureSlider').addEventListener('change', changeSetting);
 startButton.addEventListener('click', startPreview);
 stopButton.addEventListener('click', stopPreview);
 video.addEventListener('error', streamFailed);
