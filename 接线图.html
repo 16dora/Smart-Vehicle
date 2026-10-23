@@ -22,6 +22,7 @@
     .board{fill:#f6f3e9;stroke:#bdb6a7;stroke-width:2}.gutter{fill:#dad4c6}.hole{fill:#746f66;opacity:.7}.rail-plus{stroke:#d74650;stroke-width:2}.rail-minus{stroke:#2994bc;stroke-width:2}.board-text{font-size:9px;fill:#777166!important}.zone{font-size:12px;font-weight:700;fill:var(--muted)!important;letter-spacing:.05em}
     .pcb{stroke-width:2}.pcb-esp{fill:#202b39;stroke:#657489}.pcb-pca{fill:#1a5d91;stroke:#68aede}.pcb-tb{fill:#aa3038;stroke:#e16c75}.pcb-qc{fill:#1f6751;stroke:#69b99f}.pcb-buck{fill:#1c5f99;stroke:#65abe5}.silk{fill:#fff!important;font-size:10px;font-weight:700}.silk-small{fill:#dfe8f3!important;font-size:8px}.pin{fill:#d2b047;stroke:#f6dc8e;stroke-width:1}.pin-used{fill:#ffcf44;stroke:#fff1ad;stroke-width:2}.pin-name{font-size:7px;fill:#fff!important;font-weight:700}.terminal{fill:#478b62;stroke:#9bd0a9;stroke-width:1.5}.terminal-hole{fill:#25313e}.chip-body{fill:#111a25;stroke:#8a98aa}.metal{fill:#b8c0c9;stroke:#737e8a}.motor-body{fill:#f1b523;stroke:#a87509;stroke-width:2}.motor-gear{fill:#dba00c}.module-label{font-size:11px;font-weight:700}.module-note{font-size:9px;fill:var(--muted)!important}
     .wire{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 1.4px var(--soft))}.wire.power{stroke:var(--orange)}.wire.ground{stroke:var(--ground)}.wire.i2c{stroke:var(--green)}.wire.control{stroke:var(--purple)}.wire.motor{stroke:var(--cyan);stroke-width:5}.wire.heavy{stroke-width:7}.wire.focus-wire{stroke-width:6;filter:drop-shadow(0 0 2px var(--card)) drop-shadow(0 0 2px var(--card))}.wire-label{font-size:9px;font-weight:700;paint-order:stroke;stroke:var(--soft);stroke-width:4px;stroke-linejoin:round}.power-label{font-size:12px;font-weight:800;paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round}.focus-box{fill:none;stroke:var(--blue);stroke-width:2;stroke-dasharray:7 5}.endpoint-power{fill:var(--orange);stroke:var(--card);stroke-width:3}.endpoint-ground{fill:var(--ground);stroke:var(--card);stroke-width:3}.dot{stroke:var(--soft);stroke-width:2}[data-layer][hidden]{display:none}
+    .wire.spi{stroke:var(--blue)}.pcb-oled{fill:#24624b;stroke:#76b897}.oled-screen{fill:#101d23;stroke:#84968c;stroke-width:2}.oled-text{fill:#a8e3df!important;font-family:monospace;font-size:14px}.optional-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;background:var(--soft);border:1px solid var(--border);border-radius:999px;font-size:.88rem}.optional-toggle input{accent-color:#285d99}button:disabled{opacity:.4;cursor:not-allowed}[data-optional][hidden]{display:none}
     .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.info{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--soft)}.info p{margin:0;color:var(--muted);font-size:.9rem}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:22px}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:10px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{color:var(--muted);font-size:.78rem}tbody tr:last-child td{border-bottom:0}.warning{margin-top:14px;padding:13px 15px;border-left:4px solid var(--red);border-radius:9px;background:color-mix(in srgb,var(--red) 9%,var(--card))}.warning strong{color:var(--red)}
     @media(max-width:980px){.panel-head{align-items:start;flex-direction:column}.grid,.two-col{grid-template-columns:1fr}}@media(max-width:560px){.page{width:min(100% - 16px,1580px);padding-top:10px}.hero,.panel{padding:16px;border-radius:16px}th,td{padding:8px 6px}}
   </style>
@@ -42,7 +43,8 @@
         <button type="button" data-show="placement" aria-pressed="true">1 摆放</button><button type="button" data-show="qc-buck" aria-pressed="false">2A QC→降压</button><button type="button" data-show="logic-power" aria-pressed="false">2B 5V/3.3V</button><button type="button" data-show="driver-power" aria-pressed="false">2C TB6612供电</button><button type="button" data-show="i2c" aria-pressed="false">3 I²C</button><button type="button" data-show="front" aria-pressed="false">4 前轮控制</button><button type="button" data-show="rear" aria-pressed="false">5 后轮控制</button><button type="button" data-show="motor" aria-pressed="false">6 电机输出</button>
       </div>
     </div>
-    <div id="stage" class="stage" aria-live="polite"><strong>模块摆放</strong>ESP32-CAM摄像头朝右、PCB天线朝左；PCA9685的16组输出朝上下两侧；两块TB6612放在面包板右侧。</div>
+    <div class="buttons" style="margin-bottom:12px"><label class="optional-toggle"><input id="oled-option" type="checkbox" checked>接入可选 OLED</label><button type="button" data-show="oled-power" aria-pressed="false">7A OLED 供电</button><button type="button" data-show="oled-signal" aria-pressed="false">7B OLED SPI</button></div>
+    <div id="stage" class="stage" aria-live="polite"><strong>模块摆放</strong>ESP32-CAM摄像头朝右、PCB天线朝左；PCA9685的16组输出朝上下两侧；两块TB6612放在面包板右侧。下方绿色模块为可选 OLED。</div>
     <div class="legend"><span style="color:var(--orange)"><i class="swatch"></i>正电源</span><span style="color:var(--ground)"><i class="swatch"></i>GND</span><span style="color:var(--green)"><i class="swatch"></i>I²C</span><span style="color:var(--purple)"><i class="swatch"></i>PWM/方向</span><span style="color:var(--cyan)"><i class="swatch"></i>电机输出</span></div>
 
     <div class="diagram-shell">
@@ -163,6 +165,35 @@
           <path class="wire motor" data-net="m4a" d="M1600 621 H1625 V663 H1680"/><path class="wire motor" data-net="m4b" d="M1600 641 H1645 V687 H1680"/>
           <text class="wire-label" x="1610" y="258">A01</text><text class="wire-label" x="1610" y="280">A02</text><text class="wire-label" x="1610" y="300">B02</text><text class="wire-label" x="1610" y="320">B01</text>
         </g>
+        <!-- 可选屏幕单独放在控制区下方；外壳尺寸为示意，针序按实物丝印。 -->
+        <g id="oled" data-optional="oled">
+          <text class="zone" x="1200" y="820">可选 · 百问网 SSD1306 / 128×64</text>
+          <rect class="pcb pcb-oled" x="850" y="790" width="330" height="220" rx="9"/>
+          <rect class="oled-screen" x="890" y="860" width="250" height="125" rx="4"/>
+          <text class="oled-text" x="910" y="885">CPU0: 35.2%</text><text class="oled-text" x="910" y="910">CPU1: 68.5%</text><text class="oled-text" x="910" y="935">EXP: 12.30 ms</text><text class="oled-text" x="910" y="960">AEC: ON</text>
+          <g id="oled-pins"></g>
+          <text class="module-note" x="1200" y="855">屏幕旋转摆放，排针朝上</text>
+          <text class="module-note" x="1200" y="878">显示值为示例；模块尺寸为示意</text>
+          <text class="module-note" x="1200" y="901">MISO 不接 · GPIO 即 D/C</text>
+          <text class="module-note" x="1200" y="924">CS 接公共地 · 板载 RC 复位</text>
+          <text class="module-note" x="1200" y="947">3V3 与 5V 均需供电</text>
+          <text class="module-note" x="1200" y="970">烧录前断开 U0T / U0R 两根信号线</text>
+        </g>
+        <!-- 电源与信号分层，分配独立轨道；地与 CS 仅在实心圆点处分支。 -->
+        <g data-layer="oled-power" hidden>
+          <path class="wire power" data-net="oled-5v" d="M1250 358 H1340 V770 H1150 V800"/>
+          <path class="wire power" data-net="oled-3v3" d="M1200 618 V710 H1110 V800"/>
+          <path class="wire ground" data-net="oled-gnd" d="M1180 638 V690 H1070 V800 M1070 750 H870 V800"/>
+          <circle class="endpoint-ground" cx="1070" cy="750" r="5"/>
+          <circle class="endpoint-power" cx="1250" cy="358" r="5"/><circle class="endpoint-power" cx="1200" cy="618" r="5"/><circle class="endpoint-ground" cx="1180" cy="638" r="5"/>
+          <text class="wire-label" x="1210" y="702">3.3V → 3V3</text><text class="wire-label" x="1180" y="765">5V → 5V</text><text class="wire-label" x="890" y="743">公共地 → GND / CS</text>
+        </g>
+        <g data-layer="oled-signal" hidden>
+          <path class="wire spi" data-net="oled-sclk" d="M570 572 V690 H910 V707 C924 707 924 723 910 723 V800"/>
+          <path class="wire spi" data-net="oled-mosi" d="M540 572 V715 H900 M925 715 H990 V800"/>
+          <path class="wire spi" data-net="oled-dc" d="M600 430 V400 H750 V675 H1030 V800"/>
+          <text class="wire-label" x="580" y="683">U0R / GPIO3 → SCLK</text><text class="wire-label" x="550" y="709">U0T / GPIO1 → MOSI</text><text class="wire-label" x="765" y="669">IO15 → GPIO（D/C）</text>
+        </g>
       </svg>
     </div>
   </section>
@@ -186,6 +217,16 @@
     <div><h2 id="power-map-title">XL4015端子逐孔对应</h2><table><thead><tr><th>模块端子</th><th>连接到</th></tr></thead><tbody><tr><td>两块XL4015的 IN+</td><td>QC触发板 V+（先确认已触发12V）</td></tr><tr><td>两块XL4015的 IN−</td><td>QC触发板 V−</td></tr><tr><td>#1 OUT+</td><td>调到6.0V后，连接两块TB6612的 VM</td></tr><tr><td>#1 OUT−</td><td>两块TB6612的GND，并与逻辑GND共地</td></tr><tr><td>#2 OUT+</td><td>调到5.0V后，连接面包板5V母线和ESP32-CAM 5V</td></tr><tr><td>#2 OUT−</td><td>面包板公共GND母线</td></tr></tbody></table></div>
     <div><h2>TB6612供电逐针对应</h2><table><thead><tr><th>TB6612针脚</th><th>电源来源</th><th>用途</th></tr></thead><tbody><tr><td>VM</td><td>XL4015 #1 OUT+（6.0V）</td><td>四个TT电机的动力电源</td></tr><tr><td>VCC</td><td>ESP32-CAM 3V3 / 3.3V母线</td><td>TB6612逻辑电源</td></tr><tr><td>STBY</td><td>3.3V母线</td><td>拉高后驱动器保持工作</td></tr><tr><td>GND</td><td>公共GND</td><td>6V、5V、3.3V控制信号必须共地</td></tr></tbody></table></div>
   </section>
+  <section class="panel" aria-labelledby="oled-map-title">
+    <h2 id="oled-map-title">可选 OLED 接线与固件配置</h2>
+    <p class="subtle">百问网 SSD1306，128×64 单色，SPI 只写。上图针序按 Material 中的实物丝印；屏幕旋转后排针朝上，从左到右为 CS、SCLK、MISO、MOSI、GPIO、GND、3V3、5V。</p>
+    <table><thead><tr><th>OLED 丝印</th><th>连接到</th><th>作用</th></tr></thead><tbody>
+      <tr><td>SCLK</td><td>U0R / GPIO3</td><td>SPI2 时钟，1MHz</td></tr><tr><td>MOSI</td><td>U0T / GPIO1</td><td>SPI2 数据输出</td></tr><tr><td>GPIO</td><td>IO15 / GPIO15</td><td>D/C，低电平命令、高电平数据</td></tr><tr><td>CS / GND</td><td>公共 GND</td><td>专用 SPI 总线持续选中，两个针均接地</td></tr><tr><td>MISO</td><td>不接</td><td>模块内部未连接</td></tr><tr><td>3V3</td><td>ESP32-CAM 3V3 / 3.3V 母线</td><td>逻辑及电荷泵相关电源</td></tr><tr><td>5V</td><td>XL4015 #2 的 5V 母线</td><td>屏幕 VCC，需与 3V3 同时接入</td></tr>
+    </tbody></table>
+    <p class="subtle">固件配置 CAMERA_OLED_ENABLED 可关闭此模块。默认启用并关闭 UART 控制台，每两秒显示 CPU0 / CPU1 忙碌率估算、相机积分时间估算及 AEC；首轮或无效数据为 --，曝光超过十秒未更新也显示 --。无需打开网页。</p>
+    <div class="warning"><strong>串口复用：</strong>启用 OLED 时禁止 UART0 控制台输出。烧录前断开 OLED 的 U0T、U0R 两根信号线；烧录后移除烧写板再接回。未安装屏幕时可以关闭 OLED；SPI 无应答机制，软件无法判断屏幕是否实际接上。</div>
+    <p class="subtle">资料：<a href="https://ldd.100ask.net/zh/11_SPI/08_1.html">百问网 OLED 说明</a> · <a href="https://ldd.100ask.net/_images/49_oled_sch.png">模块原理图</a></p>
+  </section>
 </main>
 
 <script>
@@ -205,6 +246,10 @@
   espTop.forEach((name,i)=>{const x=510+i*30;circle(espPins,x,430,5,['IO14','IO13','GND','5V'].includes(name)?'pin-used':'pin');text(espPins,x,446,name,'pin-name')});
   espBottom.forEach((name,i)=>{const x=510+i*30;circle(espPins,x,572,5,['GND','3V3'].includes(name)?'pin-used':'pin');text(espPins,x,563,name,'pin-name')});
 
+  const oledPins=document.getElementById('oled-pins');
+  const oledNames=['CS','SCLK','MISO','MOSI','GPIO','GND','3V3','5V'];
+  for(let i=0;i<oledNames.length;i+=1){const x=870+i*40;circle(oledPins,x,800,5,i===2?'pin':'pin-used');text(oledPins,x,823,oledNames[i],'pin-name');}
+
   const pcaControl=document.getElementById('pca-control');
   ['GND','OE','SCL','SDA','VCC','V+'].forEach((name,i)=>{const y=438+i*22;circle(pcaControl,850,y,4.7,['GND','SCL','SDA','VCC'].includes(name)?'pin-used':'pin');text(pcaControl,862,y+3,name,'pin-name','start')});
   const pcaChannels=document.getElementById('pca-channels');
@@ -217,6 +262,10 @@
 
   const copy={placement:['模块摆放','模块使用真实长宽比例和边缘针脚位置。ESP32-CAM的摄像头朝右，PCA9685输出口朝上下。'],'qc-buck':['QC→两块降压板','橙线：QC V+接两块XL4015左侧IN+；深色线：QC V−接两块左侧IN−。XL4015右侧OUT端在这一层故意不接。'],'logic-power':['5V与3.3V逻辑供电','XL4015 #2右侧OUT+输出5.0V给ESP32；ESP32的3V3脚再给PCA9685 VCC和3.3V母线。所有深色线为公共GND。'],'driver-power':['TB6612双电源','每块TB6612的VM接XL4015 #1的6.0V；VCC和STBY接3.3V；GND必须同时与动力地和逻辑地共地。'],i2c:['I²C','GPIO13连接SDA，GPIO14连接SCL；两根折线使用不同走线槽。'],front:['前轮控制','CH0～CH5从PCA9685的实际S针连接到TB6612 #1对应控制针。线段可能交叉，但没有任何共线重叠。'],rear:['后轮控制','CH6～CH11连接TB6612 #2。每条线使用独立水平高度和独立垂直入口。'],motor:['电机输出','A01/A02和B01/B02分别用两根粗线直达四台TT电机，不进入面包板。']};
   const buttons=[...document.querySelectorAll('[data-show]')],layers=[...document.querySelectorAll('[data-layer]')],stage=document.getElementById('stage');
+  copy['oled-power']=['可选 OLED：供电','3V3 与 5V 均需接入；GND、CS 接公共地。两路正电源与地使用不同走线槽，地仅在实心圆点处分支。'];
+  copy['oled-signal']=['可选 OLED：SPI','U0R / GPIO3 → SCLK，U0T / GPIO1 → MOSI，IO15 → GPIO（D/C）。圆弧为跨线桥，交越处不连接，无重叠线段。MISO 不接；UART 控制台必须关闭。'];
+  function toggleOled(){const enabled=document.getElementById('oled-option').checked;document.getElementById('oled').toggleAttribute('hidden',!enabled);for(const button of buttons){if(button.dataset.show.startsWith('oled-'))button.disabled=!enabled;}if(!enabled){for(const layer of layers){if(layer.dataset.layer.startsWith('oled-')&&!layer.hasAttribute('hidden'))buttons[0].click();}}}
+  document.getElementById('oled-option').addEventListener('change',toggleOled);
   buttons.forEach(button=>button.addEventListener('click',()=>{const selected=button.dataset.show;buttons.forEach(item=>item.setAttribute('aria-pressed',String(item===button)));layers.forEach(layer=>layer.toggleAttribute('hidden',layer.dataset.layer!==selected));const [title,body]=copy[selected];stage.replaceChildren();const strong=document.createElement('strong');strong.textContent=title;stage.append(strong,document.createTextNode(body));}));
 </script>
 </body>

@@ -8,6 +8,9 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "motor_control.h"
+#if CONFIG_CAMERA_OLED_ENABLED
+#include "driver/spi_master.h"
+#endif
 
 // 固件生命周期内拥有相机、网络和 HTTP 服务；共享状态由互斥锁或原子操作保护。
 class CameraWeb
@@ -24,6 +27,27 @@ public:
 
 private:
     CameraWeb() = default;
+#if CONFIG_CAMERA_OLED_ENABLED
+    // 输入：无；输出：初始化结果；作用：配置独占 SPI2 与百问网 SSD1306。
+    esp_err_t initOled();
+    // 输入：命令/数据标记和字节；输出：发送结果；作用：先切换 D/C，再同步发送。
+    esp_err_t writeOled(bool isData, const uint8_t* bytes, size_t count);
+    // 输入：双核有效性及忙碌率；输出：无；作用：显示统计与有时效限制的曝光快照。
+    void updateOled(bool isCpuValid, const std::array<double, 2>& busyPct);
+    // 输入：帧缓冲、页和文本；输出：无；作用：将垂直放大两倍的 ASCII 字形绘制到显存。
+    static void drawOledText(std::array<uint8_t, 1024>& frame, int page, const char* value);
+    // SPI2 设备仅由启动流程和主任务访问，空句柄表示显示已禁用。
+    spi_device_handle_t m_oled = nullptr;
+    // 以下曝光快照由 m_statusMutex 保护，OLED 不在持锁期间发送 SPI。
+    // 最近成功读取的积分时间，单位毫秒。
+    double m_oledExpMs = 0;
+    // 最近曝光采样的单调微秒时间，用于十秒过期判断。
+    int64_t m_oledExpAtUs = 0;
+    // 最近曝光寄存器采样是否有效。
+    bool m_isOledExpValid = false;
+    // 最近采样时的自动曝光开关。
+    bool m_isOledAuto = true;
+#endif
     // 输入：无；输出：驱动结果；作用：配置 AI-Thinker 引脚与 PSRAM 帧缓冲。
     esp_err_t initCamera();
     // 输入：已初始化的 OV2640；输出：设置结果；作用：分辨率变化后恢复低外部时钟的内部倍频。

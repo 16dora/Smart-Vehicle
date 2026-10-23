@@ -7,7 +7,7 @@
 #include <vector>
 #endif
 
-// 输入：无；输出：无；作用：启动服务，失败时保持串口可见且不启动后续业务。
+// 输入：无；输出：无；作用：启动服务；OLED 固件关闭串口控制台以复用 UART0 引脚。
 extern "C" void app_main(void)
 {
     const esp_err_t result = CameraWeb::instance().start();
