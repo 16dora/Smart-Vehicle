@@ -26,6 +26,7 @@
     .drive-turn{display:flex;gap:8px;max-width:400px;margin:auto}.drive-turn button{flex:1}
     [data-drive]{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
     [data-drive].held{background:#66b8f6;color:#071422}.drive-stop{background:#7b353c;border-color:#c16a72}
+    .arm-joint{margin:16px 0;padding:14px;border:1px solid #425672;border-radius:10px}.arm-joint .toolbar{margin-top:10px}#armMessage{line-height:1.8;color:#b6d9f8}
     #motorMessage{min-height:24px;color:#b6d9f8;font-size:13px;line-height:1.7}
     @media(max-width:780px){.layout{grid-template-columns:1fr}header{align-items:flex-start}.preview{min-height:220px}main{padding:20px 14px}}
   </style>
@@ -95,6 +96,27 @@
         <p id="motorMessage" role="status" aria-live="polite">正在检查电机模块…</p>
         <p class="muted">指令中断约 0.5 秒自动停车。当前按 X 型麦轮布局混控，仅使用一个控制页面操作。</p>
       </div>
+      <section class="drive" aria-label="可选机械臂控制">
+        <h2>机械臂 <span class="badge" id="armState">等待状态</span></h2>
+        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。</p>
+        <fieldset id="armSettings" disabled>
+          <div class="arm-joint">
+            <label for="armAngle0">关节 1 / CH0 · <span id="armTarget0">未给定目标</span></label>
+            <input id="armAngle0" type="number" min="30" max="150" step="1" value="90">
+            <p class="muted" id="armLimits0">等待软件限位</p>
+            <div class="toolbar"><button type="button" data-arm-joint="0">发送关节 1 目标</button></div>
+          </div>
+          <div class="arm-joint">
+            <label for="armAngle1">关节 2 / CH1 · <span id="armTarget1">未给定目标</span></label>
+            <input id="armAngle1" type="number" min="30" max="150" step="1" value="90">
+            <p class="muted" id="armLimits1">等待软件限位</p>
+            <div class="toolbar"><button type="button" data-arm-joint="1">发送关节 2 目标</button></div>
+          </div>
+          <button type="button" id="armRelease" class="drive-stop">释放两个关节（承重时可能下垂）</button>
+        </fieldset>
+        <p id="armMessage" role="status" aria-live="polite">正在检查可选机械臂…</p>
+        <p class="muted">软件限位不能检测机械碰撞或堵转。断网后保持已设目标；释放输出并不保证能保持当前位置。</p>
+      </section>
     </section>
     <aside class="card">
       <h2>图像设置</h2>
@@ -778,6 +800,94 @@ stopButton.addEventListener('click', stopPreview);
 video.addEventListener('error', streamFailed);
 pollStatus();
 setInterval(pollStatus, 2000);
+// 机械臂与车轮分开查询，所有命令逐个提交，不重试或排队回放旧动作。
+const armUrl = new URL('/arm', motorUrl);
+const armSettings = document.getElementById('armSettings');
+// 最后读取到的状态仅含目标，没有舵机实际角度反馈。
+let armSnapshot = null;
+// 命令与轮询互斥；迟到的旧轮询不能覆盖新命令结果。
+let armBusy = false;
+// 状态读取串行进行，网络失败时禁用动作并等待下轮重新查询。
+let armPolling = false;
+
+// 输入：状态；输出：无；作用：更新限位和最后目标，不覆盖用户未提交的输入。
+function updateArm(state) {
+  armSnapshot = state;
+  armSettings.disabled = armBusy || !state.enabled || !state.ready;
+  document.getElementById('armState').textContent = !state.enabled ? '未启用' : state.ready ? '可操作' : '不可用';
+  for (let joint = 0; joint < 2; joint += 1) {
+    const input = document.getElementById('armAngle' + joint);
+    input.min = state.minimum[joint];
+    input.max = state.maximum[joint];
+    document.getElementById('armLimits' + joint).textContent = '软件范围 ' + input.min + '°～' + input.max + '°';
+    const angle = state.angles[joint];
+    document.getElementById('armTarget' + joint).textContent = angle < 0 ? '未给定目标' :
+      '最后目标 ' + angle + '° · ' + (state.holding[joint] ? '保持输出' : '已释放');
+  }
+}
+
+// 输入：无；输出：无；作用：低频获取机械臂状态，初始化和恢复连接均不自动发送角度。
+async function pollArm() {
+  if (armBusy || armPolling || document.hidden || pageLeaving) return;
+  armPolling = true;
+  try {
+    const state = JSON.parse(await request(armUrl.href, {timeout: 1500}));
+    if (armBusy || pageLeaving) return;
+    const first = armSnapshot === null;
+    updateArm(state);
+    if (first && state.ready) document.getElementById('armMessage').textContent = '机械臂已就绪，尚未发送新动作；请先卸载连杆校准。';
+    if (!state.enabled) document.getElementById('armMessage').textContent = '当前固件关闭机械臂。';
+    else if (!state.ready) document.getElementById('armMessage').textContent = '机械臂板缺失或驱动故障：' + state.fault + '。车轮与相机可独立使用。';
+  } catch (error) {
+    armSnapshot = null;
+    armSettings.disabled = true;
+    document.getElementById('armState').textContent = '状态未知';
+    document.getElementById('armMessage').textContent = '状态读取失败，不自动重发动作；断网时可能仍保持输出。';
+  } finally {
+    armPolling = false;
+  }
+}
+
+// 输入：按钮事件；输出：无；作用：严格校验后发送一次角度或明确释放，失败后只查询、不重试。
+async function commandArm(event) {
+  if (armBusy || armPolling || !armSnapshot || !armSnapshot.ready) return;
+  const release = event.currentTarget.id === 'armRelease';
+  const body = new URLSearchParams({action: release ? 'release' : 'set'});
+  let limitText = '';
+  if (!release) {
+    const joint = Number(event.currentTarget.dataset.armJoint);
+    const input = document.getElementById('armAngle' + joint);
+    const angle = Number(input.value);
+    if (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint]) {
+      document.getElementById('armMessage').textContent = '关节 ' + (joint + 1) + ' 超出软件范围，指令未发送。';
+      return;
+    }
+    body.set('joint', joint);
+    body.set('angle', angle);
+    body.set('generation', armSnapshot.generation);
+    if (angle === armSnapshot.minimum[joint]) limitText = '已达到设定下限；';
+    if (angle === armSnapshot.maximum[joint]) limitText = '已达到设定上限；';
+  }
+  armBusy = true;
+  armSettings.disabled = true;
+  try {
+    const state = JSON.parse(await request(armUrl.href, {method: 'POST', body, timeout: 1500}));
+    updateArm(state);
+    document.getElementById('armMessage').textContent = release ? '两个关节输出已释放，请注意承重机械臂。' : limitText + '目标已写入，不能据此确认实际到位。';
+  } catch (error) {
+    armSnapshot = null;
+    document.getElementById('armMessage').textContent = '指令结果未确认或被拒绝，不自动重发。' + error.message;
+  } finally {
+    armBusy = false;
+    armSettings.disabled = !armSnapshot || !armSnapshot.ready;
+  }
+}
+
+for (const button of document.querySelectorAll('[data-arm-joint]')) button.addEventListener('click', commandArm);
+document.getElementById('armRelease').addEventListener('click', commandArm);
+pollArm();
+setInterval(pollArm, 2000);
+
 </script>
 </body>
 </html>

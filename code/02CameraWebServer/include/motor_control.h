@@ -5,7 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <type_traits>
-#include "driver/i2c_master.h"
+#include "pca9685_bus.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -23,11 +23,12 @@ struct MotorState
     std::array<int, 4> wheels{}; // 归一化后、接线反向修正前的轮占空比。
 };
 
-// 独占 PCA9685 总线及停车任务；电机锁独立于相机锁，不占用相机 LEDC。
+// 车轮混控与超时停车；借用共享总线，不拥有机械臂状态。
 class MotorControl
 {
 public:
-    MotorControl() = default;
+    // 输入：共享总线；输出：实例；作用：只借用传输资源，车轮状态独立维护。
+    explicit MotorControl(Pca9685Bus& bus) : m_bus(bus) {}
     ~MotorControl() = default;
     MotorControl(const MotorControl&) = delete;
     MotorControl& operator=(const MotorControl&) = delete;
@@ -55,19 +56,15 @@ private:
     void setFault(esp_err_t result);
     // 输入：实例；输出：无；作用：每 50 ms 检查指令租约和网络停车要求。
     static void watchTask(void* arg);
-    // 输入：资源句柄；输出：无；作用：RAII 释放总线、设备和监视任务。
-    static void releaseBus(std::remove_pointer_t<i2c_master_bus_handle_t>* bus);
-    static void releaseDevice(std::remove_pointer_t<i2c_master_dev_handle_t>* device);
+    // 输入：任务句柄；输出：无；作用：RAII 释放停车监视任务。
     static void releaseTask(std::remove_pointer_t<TaskHandle_t>* task);
 
     mutable std::mutex m_mutex; // HTTP 与停车任务共享的状态和 I2C 访问锁。
     MotorState m_state; // 仅在 m_mutex 保护下访问。
     int64_t m_lastCmdUs = 0; // 最后一次有效指令的接收时刻，单位微秒。
     std::atomic<bool> m_hasStop{false}; // 网络回调投递停车；运动请求不能清除此要求。
-    std::unique_ptr<std::remove_pointer_t<i2c_master_bus_handle_t>, decltype(&releaseBus)>
-        m_bus{nullptr, releaseBus}; // 先创建，最后释放，避免设备引用失效总线。
-    std::unique_ptr<std::remove_pointer_t<i2c_master_dev_handle_t>, decltype(&releaseDevice)>
-        m_device{nullptr, releaseDevice}; // PCA9685 的独占 SDK 设备句柄。
+    Pca9685Bus& m_bus; // 外部共享实例，由应用保证先创建、后销毁。
+    bool m_isStarted = false; // 防止重复创建停车监视任务。
     std::unique_ptr<std::remove_pointer_t<TaskHandle_t>, decltype(&releaseTask)>
-        m_task{nullptr, releaseTask}; // 先于设备与总线释放的停车监视任务。
+        m_task{nullptr, releaseTask}; // 先于应用共享总线释放的停车监视任务。
 };

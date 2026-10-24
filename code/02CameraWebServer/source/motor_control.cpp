@@ -9,57 +9,26 @@ static constexpr char TAG[] = "motor_control";
 // 浏览器每 100 ms 续期；超过 500 ms 没有有效指令便关闭输出。
 static constexpr int64_t LEASE_US = 500000;
 #if CONFIG_MOTOR_ENABLED
-// 单次 I2C 操作最多等待 20 ms，避免断线长期占用控制请求。
+// 单次软件 I2C 事务最多等待 20 ms，避免断线长期占用控制请求。
 static constexpr int I2C_TIMEOUT_MS = 20;
 // PCA9685 的四轮方向修正位，bit0 至 bit3 对应左前、右前、左后、右后。
 static constexpr unsigned INVERT_MASK = CONFIG_MOTOR_INVERT_MASK;
 #endif
 
-// 输入：寄存器及值；输出：SDK 结果；作用：集中记录寄存器写入及失败原因。
+// 输入：寄存器与值；输出：结果；作用：仅访问车轮数据分支。
 esp_err_t MotorControl::writeRegister(uint8_t reg, uint8_t value)
 {
-#if CONFIG_MOTOR_ENABLED
-    const uint8_t data[] = {reg, value};
-    ESP_LOGI(TAG, "i2c_master_transmit() >> address=0x%02x reg=0x%02x value=0x%02x timeout_ms=%d",
-             CONFIG_MOTOR_I2C_ADDRESS, reg, value, I2C_TIMEOUT_MS);
-    const esp_err_t result = i2c_master_transmit(m_device.get(), data, sizeof(data), I2C_TIMEOUT_MS);
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "i2c_master_transmit() << result=ESP_OK");
-    }
-    else
-    {
-        // 总线故障必须保留原始 SDK 错误，不能把写失败视为已停车。
-        ESP_LOGE(TAG, "i2c_master_transmit() << result=%s", esp_err_to_name(result));
-    }
-    return result;
-#else
-    // 禁用电机的构建不能引用新版 I2C 实现，允许相机单独选择其驱动。
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
+    return m_bus.writePca(false, reg, value);
 }
 
-// 输入：寄存器；输出：值和结果；作用：验证 PCA9685 配置回读。
+// 输入：寄存器；输出：值与结果；作用：只在车轮分支回读配置。
 esp_err_t MotorControl::readRegister(uint8_t reg, uint8_t& value)
 {
-#if CONFIG_MOTOR_ENABLED
-    ESP_LOGI(TAG, "i2c_master_transmit_receive() >> address=0x%02x reg=0x%02x timeout_ms=%d",
-             CONFIG_MOTOR_I2C_ADDRESS, reg, I2C_TIMEOUT_MS);
-    const esp_err_t result = i2c_master_transmit_receive(
-        m_device.get(), &reg, 1, &value, 1, I2C_TIMEOUT_MS);
-    if (result == ESP_OK)
-    {
-        ESP_LOGI(TAG, "i2c_master_transmit_receive() << result=ESP_OK value=0x%02x", value);
-    }
-    else
-    {
-        // 读取失败时出参不可信，仅记录错误结果，不将其显示成寄存器回读值。
-        ESP_LOGE(TAG, "i2c_master_transmit_receive() << result=%s", esp_err_to_name(result));
-    }
+    ESP_LOGI(TAG, "readRegister() >> reg=0x%02x", reg);
+    const esp_err_t result = m_bus.transfer(false, &reg, 1, &value);
+    if (result == ESP_OK) ESP_LOGI(TAG, "readRegister() << result=ESP_OK value=0x%02x", value);
+    else ESP_LOGE(TAG, "readRegister() << result=%s", esp_err_to_name(result));
     return result;
-#else
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
 }
 
 // 输入：构建配置；输出：初始化结果；作用：使输出先进入关闭状态，随后允许网页控制。
@@ -72,45 +41,15 @@ esp_err_t MotorControl::start()
 #else
     std::lock_guard<std::mutex> lock(m_mutex);
     m_state.enabled = true;
-    if (m_bus)
+    if (m_isStarted)
     {
         // 固件生命周期只初始化一次，禁止重复创建停车任务。
         ESP_LOGW(TAG, "start() << result=ALREADY_STARTED");
         return ESP_ERR_INVALID_STATE;
     }
-    i2c_master_bus_config_t config = {};
-#if CONFIG_SCCB_HARDWARE_I2C_PORT1
-    config.i2c_port = 0;
-#else
-    config.i2c_port = 1;
-#endif
-    // 相机 SCCB 独占另一个控制器；GPIO13/14 不与相机引脚或 LEDC 重用。
-    config.sda_io_num = GPIO_NUM_13;
-    config.scl_io_num = GPIO_NUM_14;
-    config.clk_source = I2C_CLK_SRC_DEFAULT;
-    config.glitch_ignore_cnt = 7;
-    config.flags.enable_internal_pullup = true;
-    i2c_master_bus_handle_t bus = nullptr;
-    ESP_LOGI(TAG, "i2c_new_master_bus() >> port=%d sda=13 scl=14 glitch=7 pullup=1", config.i2c_port);
-    esp_err_t result = i2c_new_master_bus(&config, &bus);
-    ESP_LOGI(TAG, "i2c_new_master_bus() << result=%s", esp_err_to_name(result));
-    if (result == ESP_OK)
-    {
-        m_bus.reset(bus);
-        i2c_device_config_t device = {};
-        device.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-        device.device_address = CONFIG_MOTOR_I2C_ADDRESS;
-        device.scl_speed_hz = 100000;
-        i2c_master_dev_handle_t handle = nullptr;
-        ESP_LOGI(TAG, "i2c_master_bus_add_device() >> address=0x%02x scl_hz=100000 ack=1",
-                 CONFIG_MOTOR_I2C_ADDRESS);
-        result = i2c_master_bus_add_device(m_bus.get(), &device, &handle);
-        ESP_LOGI(TAG, "i2c_master_bus_add_device() << result=%s", esp_err_to_name(result));
-        if (result == ESP_OK)
-        {
-            m_device.reset(handle);
-        }
-    }
+    m_isStarted = true;
+    // 总线初始化由各模块幂等复用，车轮不再承担机械臂启动职责。
+    esp_err_t result = m_bus.start();
     // 即使上一次固件仍在输出 PWM，也先通过全通道关闭位撤销它。
     if (result == ESP_OK) result = writeRegister(0xfd, 0x10);
     uint8_t mode = 0;
@@ -188,11 +127,13 @@ esp_err_t MotorControl::writeWheels(const std::array<int, 4>& wheels)
             }
         }
     }
-    ESP_LOGI(TAG, "i2c_master_transmit() >> address=0x%02x reg=0x06 bytes=49 wheels=%d,%d,%d,%d invert=%u timeout_ms=%d",
+    ESP_LOGI(TAG, "transfer() >> address=0x%02x reg=0x06 bytes=49 wheels=%d,%d,%d,%d invert=%u timeout_ms=%d",
              CONFIG_MOTOR_I2C_ADDRESS, wheels[0], wheels[1], wheels[2], wheels[3], INVERT_MASK, I2C_TIMEOUT_MS);
-    const esp_err_t result = i2c_master_transmit(m_device.get(), data.data(), data.size(), I2C_TIMEOUT_MS);
-    if (result == ESP_OK) ESP_LOGI(TAG, "i2c_master_transmit() << result=ESP_OK");
-    else ESP_LOGE(TAG, "i2c_master_transmit() << result=%s", esp_err_to_name(result));
+    // 每通道数据已明确写入 FULL_OFF/FULL_ON 和完整计数，直接覆盖停车时的广播值。
+    // 不能再清零 ALL_LED_OFF_H（0xFD），否则会广播覆盖各通道的 PWM 计数高位。
+    const esp_err_t result = m_bus.transfer(false, data.data(), data.size());
+    if (result == ESP_OK) ESP_LOGI(TAG, "transfer() << result=ESP_OK");
+    else ESP_LOGE(TAG, "transfer() << result=%s", esp_err_to_name(result));
     return result;
 #else
     return ESP_ERR_NOT_SUPPORTED;
@@ -275,7 +216,7 @@ esp_err_t MotorControl::stopLocked(const char* reason)
 {
     ESP_LOGI(TAG, "stop() >> reason=%s", reason);
     ++m_state.generation;
-    const esp_err_t result = m_device ? writeRegister(0xfd, 0x10) : ESP_OK;
+    const esp_err_t result = m_bus.isReady() ? writeRegister(0xfd, 0x10) : ESP_OK;
     m_state.forward = 0;
     m_state.right = 0;
     m_state.turn = 0;
@@ -330,7 +271,11 @@ void MotorControl::watchTask(void* arg)
         vTaskDelay(pdMS_TO_TICKS(50));
         std::lock_guard<std::mutex> lock(motor->m_mutex);
         // 先消费网络停车，再检查期限；停车仅触发一次，不在故障下无限重试。
-        if (motor->m_hasStop.exchange(false)) motor->stopLocked("network disconnected");
+        if (motor->m_hasStop.exchange(false))
+        {
+            // 网络事件只撤销车轮运动，其他模块由应用层分别通知。
+            motor->stopLocked("network disconnected");
+        }
         else if (motor->m_state.moving && esp_timer_get_time() - motor->m_lastCmdUs >= LEASE_US)
         {
             ESP_LOGW(TAG, "Command timeout age_ms=%lld lease_ms=500 generation=%lu",
@@ -341,32 +286,10 @@ void MotorControl::watchTask(void* arg)
     }
 }
 
-// 输入：资源句柄；输出：无；作用：按任务、设备、总线的顺序由成员 RAII 自动回收。
+// 输入：任务句柄；输出：无；作用：销毁模块前释放停车监视任务。
 void MotorControl::releaseTask(std::remove_pointer_t<TaskHandle_t>* task)
 {
     ESP_LOGI(TAG, "vTaskDelete() >> motor_watch");
     vTaskDelete(task);
     ESP_LOGI(TAG, "vTaskDelete() <<");
-}
-
-// 输入：设备句柄；输出：无；作用：设备在所属总线销毁前注销。
-void MotorControl::releaseDevice(std::remove_pointer_t<i2c_master_dev_handle_t>* device)
-{
-#if CONFIG_MOTOR_ENABLED
-    ESP_LOGI(TAG, "i2c_master_bus_rm_device() >>");
-    const esp_err_t result = i2c_master_bus_rm_device(device);
-    if (result == ESP_OK) ESP_LOGI(TAG, "i2c_master_bus_rm_device() << result=ESP_OK");
-    else ESP_LOGE(TAG, "i2c_master_bus_rm_device() << result=%s", esp_err_to_name(result));
-#endif
-}
-
-// 输入：总线句柄；输出：无；作用：释放独占控制器，不触碰相机总线。
-void MotorControl::releaseBus(std::remove_pointer_t<i2c_master_bus_handle_t>* bus)
-{
-#if CONFIG_MOTOR_ENABLED
-    ESP_LOGI(TAG, "i2c_del_master_bus() >>");
-    const esp_err_t result = i2c_del_master_bus(bus);
-    if (result == ESP_OK) ESP_LOGI(TAG, "i2c_del_master_bus() << result=ESP_OK");
-    else ESP_LOGE(TAG, "i2c_del_master_bus() << result=%s", esp_err_to_name(result));
-#endif
 }

@@ -8,9 +8,8 @@
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "motor_control.h"
-#if CONFIG_CAMERA_OLED_ENABLED
-#include "driver/spi_master.h"
-#endif
+#include "arm_control.h"
+#include "oled_display.h"
 
 // 固件生命周期内拥有相机、网络和 HTTP 服务；共享状态由互斥锁或原子操作保护。
 class CameraWeb
@@ -28,16 +27,9 @@ public:
 private:
     CameraWeb() = default;
 #if CONFIG_CAMERA_OLED_ENABLED
-    // 输入：无；输出：初始化结果；作用：配置独占 SPI2 与百问网 SSD1306。
-    esp_err_t initOled();
-    // 输入：命令/数据标记和字节；输出：发送结果；作用：先切换 D/C，再同步发送。
-    esp_err_t writeOled(bool isData, const uint8_t* bytes, size_t count);
-    // 输入：双核有效性及忙碌率；输出：无；作用：显示统计与有时效限制的曝光快照。
+    // 输入：CPU 有效性与忙碌率；输出：无；作用：准备显示快照，锁外调用独立 OLED 驱动。
     void updateOled(bool isCpuValid, const std::array<double, 2>& busyPct);
-    // 输入：帧缓冲、页和文本；输出：无；作用：将垂直放大两倍的 ASCII 字形绘制到显存。
-    static void drawOledText(std::array<uint8_t, 1024>& frame, int page, const char* value);
-    // SPI2 设备仅由启动流程和主任务访问，空句柄表示显示已禁用。
-    spi_device_handle_t m_oled = nullptr;
+    OledDisplay m_display; // 主任务独占访问的可选显示驱动，不读取相机状态。
     // 以下曝光快照由 m_statusMutex 保护，OLED 不在持锁期间发送 SPI。
     // 最近成功读取的积分时间，单位毫秒。
     double m_oledExpMs = 0;
@@ -66,6 +58,14 @@ private:
     static esp_err_t onRequest(httpd_req_t* req);
     // 输入：独立运动请求；输出：HTTP 结果；作用：校验网页来源并直接读写电机状态。
     static esp_err_t onMotor(httpd_req_t* req);
+    // 输入：无；输出：无；作用：网络事件非阻塞通知各控制模块，使车轮停车并作废旧舵机指令。
+    void requestMotionStop();
+    // 输入：机械臂 GET/POST；输出：状态或命令结果；作用：复用运动端口的来源校验，不占用相机锁。
+    static esp_err_t onArm(httpd_req_t* req);
+    // 输入：请求；输出：机械臂 JSON；作用：返回目标、输出状态及软件限位，不宣称实际到位。
+    esp_err_t sendArm(httpd_req_t* req);
+    // 输入：角度或释放表单；输出：结果；作用：校验完整请求后执行一次明确动作。
+    esp_err_t setArm(httpd_req_t* req);
     // 输入：升级请求；输出：是否允许；作用：在握手前校验同设备来源及单控制连接。
     static esp_err_t openMotorSocket(httpd_req_t* req);
     // 输入：二进制指令；输出：处理结果；作用：接收定时推送，不逐条同步回报状态。
@@ -152,8 +152,12 @@ private:
     int m_autoDsp = 0;
     // 自动模式原有的夜间额外帧设置，手动模式冻结，恢复时原样恢复。
     int m_autoFrames = 0;
-    // 独立持锁并维护超时停车任务，相机采集和视频发送不持有电机锁。
-    MotorControl m_motor;
+    // 先于控制模块创建、晚于它们销毁，唯一拥有共享 GPIO14 总线事务锁。
+    Pca9685Bus m_pcaBus;
+    // 独立管理关节目标与限位，和车轮借用同一总线实例。
+    ArmControl m_arm{m_pcaBus};
+    // 独立维护轮状态与停车任务；销毁时先结束任务，再销毁共享总线。
+    MotorControl m_motor{m_pcaBus};
     // 控制端口服务器，生命周期与固件一致。
     httpd_handle_t m_control = nullptr;
     // 视频端口服务器，生命周期与固件一致。

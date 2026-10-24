@@ -14,16 +14,17 @@
     @media(prefers-color-scheme:dark){:root{--bg:#0d1622;--card:#172231;--soft:#1d2a3b;--ink:#eff5ff;--muted:#b3c0d3;--border:#35455c;--orange:#ffc064;--ground:#dbe3ee;--green:#4ed8b6;--purple:#b8a0ff;--cyan:#68cef6;--red:#ff7b84;--blue:#74b6ff;--shadow:0 18px 48px rgba(0,0,0,.3)}}
     *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 12% 0,color-mix(in srgb,var(--blue) 11%,transparent),transparent 32rem),var(--bg);color:var(--ink);font-family:Inter,"Microsoft YaHei","PingFang SC",system-ui,sans-serif;line-height:1.55}
     .page{width:min(1580px,calc(100% - 28px));margin:auto;padding:28px 0 60px}.hero,.panel{background:color-mix(in srgb,var(--card) 96%,transparent);border:1px solid var(--border);border-radius:22px;box-shadow:var(--shadow)}.hero{padding:30px}.panel{margin-top:22px;padding:22px}
-    .eyebrow{margin:0 0 6px;color:var(--blue);font-size:.8rem;font-weight:700;letter-spacing:.08em}h1{margin:0;font-size:clamp(2rem,4vw,3.6rem);line-height:1.06;letter-spacing:-.035em}h2{margin:0;font-size:clamp(1.35rem,2vw,2rem)}h3{margin:0 0 8px;font-size:1rem}.lede,.subtle{color:var(--muted)}.lede{max-width:95ch;margin:15px 0 0}.subtle{margin:6px 0 0;font-size:.9rem}
-    .chips,.buttons,.legend{display:flex;flex-wrap:wrap;gap:8px}.chips{margin-top:18px}.chip{padding:7px 10px;border:1px solid var(--border);border-radius:999px;background:var(--soft);font-size:.84rem}.panel-head{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:14px}
+    .eyebrow{margin:0 0 6px;color:var(--blue);font-size:.8rem;font-weight:700;letter-spacing:.08em}h1{margin:0;font-size:clamp(2rem,4vw,3.6rem);line-height:1.06;letter-spacing:-.035em}h2{margin:0;font-size:clamp(1.35rem,2vw,2rem)}h3{margin:0 0 8px;font-size:1rem}.lede,.subtle{color:var(--muted)}.lede{max-width:95ch;margin:15px 0 0}.subtle{margin:10px 0 0;font-size:1rem;line-height:1.85}
+    .chips,.buttons,.legend{display:flex;flex-wrap:wrap;gap:8px}.chips{margin-top:18px}.chip{padding:7px 10px;border:1px solid var(--border);border-radius:999px;background:var(--soft);font-size:.95rem}.panel-head{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:14px}
     button{min-height:42px;padding:8px 13px;border:1px solid var(--border);border-radius:999px;background:var(--card);color:var(--ink);font:inherit;font-weight:650}button[aria-pressed="true"]{color:#fff;background:#285d99;border-color:#285d99}button:focus-visible{outline:3px solid color-mix(in srgb,var(--blue) 45%,transparent);outline-offset:2px}
-    .stage{margin:0 0 12px;padding:12px 14px;border-left:4px solid var(--blue);border-radius:9px;background:var(--soft);min-height:50px}.stage strong{margin-right:8px}.legend{margin-bottom:12px;color:var(--muted);font-size:.83rem}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:25px;height:4px;border-radius:4px;background:currentColor}
-    .diagram-shell{overflow:auto;border:1px solid var(--border);border-radius:16px;background:var(--soft)}svg{display:block;width:100%;min-width:1280px;height:auto}svg text{font-family:Inter,"Microsoft YaHei",sans-serif;fill:var(--ink)}
-    .board{fill:#f6f3e9;stroke:#bdb6a7;stroke-width:2}.gutter{fill:#dad4c6}.hole{fill:#746f66;opacity:.7}.rail-plus{stroke:#d74650;stroke-width:2}.rail-minus{stroke:#2994bc;stroke-width:2}.board-text{font-size:9px;fill:#777166!important}.zone{font-size:12px;font-weight:700;fill:var(--muted)!important;letter-spacing:.05em}
-    .pcb{stroke-width:2}.pcb-esp{fill:#202b39;stroke:#657489}.pcb-pca{fill:#1a5d91;stroke:#68aede}.pcb-tb{fill:#aa3038;stroke:#e16c75}.pcb-qc{fill:#1f6751;stroke:#69b99f}.pcb-buck{fill:#1c5f99;stroke:#65abe5}.silk{fill:#fff!important;font-size:10px;font-weight:700}.silk-small{fill:#dfe8f3!important;font-size:8px}.pin{fill:#d2b047;stroke:#f6dc8e;stroke-width:1}.pin-used{fill:#ffcf44;stroke:#fff1ad;stroke-width:2}.pin-name{font-size:7px;fill:#fff!important;font-weight:700}.terminal{fill:#478b62;stroke:#9bd0a9;stroke-width:1.5}.terminal-hole{fill:#25313e}.chip-body{fill:#111a25;stroke:#8a98aa}.metal{fill:#b8c0c9;stroke:#737e8a}.motor-body{fill:#f1b523;stroke:#a87509;stroke-width:2}.motor-gear{fill:#dba00c}.module-label{font-size:11px;font-weight:700}.module-note{font-size:9px;fill:var(--muted)!important}
-    .wire{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 1.4px var(--soft))}.wire.power{stroke:var(--orange)}.wire.ground{stroke:var(--ground)}.wire.i2c{stroke:var(--green)}.wire.control{stroke:var(--purple)}.wire.motor{stroke:var(--cyan);stroke-width:5}.wire.heavy{stroke-width:7}.wire.focus-wire{stroke-width:6;filter:drop-shadow(0 0 2px var(--card)) drop-shadow(0 0 2px var(--card))}.wire-label{font-size:9px;font-weight:700;paint-order:stroke;stroke:var(--soft);stroke-width:4px;stroke-linejoin:round}.power-label{font-size:12px;font-weight:800;paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round}.focus-box{fill:none;stroke:var(--blue);stroke-width:2;stroke-dasharray:7 5}.endpoint-power{fill:var(--orange);stroke:var(--card);stroke-width:3}.endpoint-ground{fill:var(--ground);stroke:var(--card);stroke-width:3}.dot{stroke:var(--soft);stroke-width:2}[data-layer][hidden]{display:none}
-    .wire.spi{stroke:var(--blue)}.pcb-oled{fill:#24624b;stroke:#76b897}.oled-screen{fill:#101d23;stroke:#84968c;stroke-width:2}.oled-text{fill:#a8e3df!important;font-family:monospace;font-size:14px}.optional-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;background:var(--soft);border:1px solid var(--border);border-radius:999px;font-size:.88rem}.optional-toggle input{accent-color:#285d99}button:disabled{opacity:.4;cursor:not-allowed}[data-optional][hidden]{display:none}
-    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.info{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--soft)}.info p{margin:0;color:var(--muted);font-size:.9rem}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:22px}table{width:100%;border-collapse:collapse;font-size:.88rem}th,td{padding:10px 9px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{color:var(--muted);font-size:.78rem}tbody tr:last-child td{border-bottom:0}.warning{margin-top:14px;padding:13px 15px;border-left:4px solid var(--red);border-radius:9px;background:color-mix(in srgb,var(--red) 9%,var(--card))}.warning strong{color:var(--red)}
+    .stage{margin:0 0 12px;padding:12px 14px;border-left:4px solid var(--blue);border-radius:9px;background:var(--soft);min-height:50px}.stage{font-size:1.05rem;line-height:1.85}.stage strong{display:block;margin-bottom:4px}.legend{margin-bottom:12px;color:var(--muted);font-size:.95rem}.legend span{display:inline-flex;align-items:center;gap:6px}.swatch{width:25px;height:4px;border-radius:4px;background:currentColor}
+    .diagram-shell{width:100%;min-width:0;overflow:clip;border:1px solid var(--border);border-radius:16px;background:var(--soft)}.diagram-shell svg{display:block;width:100%;max-width:100%;min-width:0;height:auto}svg text{font-family:Inter,"Microsoft YaHei",sans-serif;fill:var(--ink)}
+    .board{fill:#f6f3e9;stroke:#bdb6a7;stroke-width:2}.gutter{fill:#dad4c6}.hole{fill:#746f66;opacity:.7}.rail-plus{stroke:#d74650;stroke-width:2}.rail-minus{stroke:#2994bc;stroke-width:2}.board-text{font-size:9px;fill:#777166!important}.zone{font-size:13px;font-weight:700;fill:var(--muted)!important;letter-spacing:.05em}
+    .pcb{stroke-width:2}.pcb-esp{fill:#202b39;stroke:#657489}.pcb-pca{fill:#1a5d91;stroke:#68aede}.pcb-tb{fill:#aa3038;stroke:#e16c75}.pcb-qc{fill:#1f6751;stroke:#69b99f}.pcb-buck{fill:#1c5f99;stroke:#65abe5}.silk{fill:#fff!important;font-size:10px;font-weight:700}.silk-small{fill:#eff5ff!important;font-size:9px}.pin{fill:#d2b047;stroke:#f6dc8e;stroke-width:1}.pin-used{fill:#ffcf44;stroke:#fff1ad;stroke-width:2}.pin-name{font-size:8px;fill:#fff!important;font-weight:700}.terminal{fill:#478b62;stroke:#9bd0a9;stroke-width:1.5}.terminal-hole{fill:#25313e}.chip-body{fill:#111a25;stroke:#8a98aa}.metal{fill:#b8c0c9;stroke:#737e8a}.motor-body{fill:#f1b523;stroke:#a87509;stroke-width:2}.motor-gear{fill:#dba00c}.module-label{font-size:12px;font-weight:700}.module-note{font-size:10px;fill:var(--muted)!important}
+    .wire{fill:none;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 1.4px var(--soft))}.wire.power{stroke:var(--orange)}.wire.ground{stroke:var(--ground)}.wire.i2c{stroke:var(--green)}.wire.control{stroke:var(--purple)}.wire.motor{stroke:var(--cyan);stroke-width:5}.wire.heavy{stroke-width:7}.wire.focus-wire{stroke-width:6;filter:drop-shadow(0 0 2px var(--card)) drop-shadow(0 0 2px var(--card))}.wire-label{font-size:10px;font-weight:700;paint-order:stroke;stroke:var(--soft);stroke-width:4px;stroke-linejoin:round}.power-label{font-size:13px;font-weight:800;paint-order:stroke;stroke:var(--card);stroke-width:5px;stroke-linejoin:round}.focus-box{fill:none;stroke:var(--blue);stroke-width:2;stroke-dasharray:7 5}.endpoint-power{fill:var(--orange);stroke:var(--card);stroke-width:3}.endpoint-ground{fill:var(--ground);stroke:var(--card);stroke-width:3}.dot{stroke:var(--soft);stroke-width:2}[data-layer][hidden]{display:none}
+    .wire.spi{stroke:var(--blue)}.pcb-oled{fill:#24624b;stroke:#76b897}.oled-screen{fill:#101d23;stroke:#84968c;stroke-width:2}.oled-text{fill:#a8e3df!important;font-family:monospace;font-size:14px}.optional-toggle{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;background:var(--soft);border:1px solid var(--border);border-radius:999px;font-size:1rem}.optional-toggle input{accent-color:#285d99}button:disabled{opacity:.4;cursor:not-allowed}[data-optional][hidden]{display:none}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.info{padding:16px;border:1px solid var(--border);border-radius:14px;background:var(--soft)}.info p{margin:0;color:var(--muted);font-size:1rem}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:22px}table{width:100%;border-collapse:collapse;font-size:1rem}th,td{padding:14px 12px;line-height:1.8;overflow-wrap:anywhere;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}th{color:var(--muted);font-size:.95rem}tbody tr:last-child td{border-bottom:0}.warning{margin-top:14px;padding:13px 15px;border-left:4px solid var(--red);border-radius:9px;background:color-mix(in srgb,var(--red) 9%,var(--card))}.warning strong{color:var(--red)}
+    .warning{line-height:1.85}.info p{line-height:1.85}.two-col>div{min-width:0}
     @media(max-width:980px){.panel-head{align-items:start;flex-direction:column}.grid,.two-col{grid-template-columns:1fr}}@media(max-width:560px){.page{width:min(100% - 16px,1580px);padding-top:10px}.hero,.panel{padding:16px;border-radius:16px}th,td{padding:8px 6px}}
   </style>
 </head>
@@ -44,10 +45,11 @@
       </div>
     </div>
     <div class="buttons" style="margin-bottom:12px"><label class="optional-toggle"><input id="oled-option" type="checkbox" checked>接入可选 OLED</label><button type="button" data-show="oled-power" aria-pressed="false">7A OLED 供电</button><button type="button" data-show="oled-signal" aria-pressed="false">7B OLED SPI</button></div>
+    <div class="buttons" style="margin-bottom:12px"><label class="optional-toggle"><input id="arm-option" type="checkbox">接入可选机械臂（第二块 PCA9685＋双 SG90）</label><button type="button" data-show="arm-power" aria-pressed="false">8A 机械臂供电</button><button type="button" data-show="arm-i2c" aria-pressed="false">8B 机械臂 I²C</button><button type="button" data-show="arm-servo" aria-pressed="false">8C 舵机插线</button></div>
     <div id="stage" class="stage" aria-live="polite"><strong>模块摆放</strong>ESP32-CAM摄像头朝右、PCB天线朝左；PCA9685的16组输出朝上下两侧；两块TB6612放在面包板右侧。下方绿色模块为可选 OLED。</div>
     <div class="legend"><span style="color:var(--orange)"><i class="swatch"></i>正电源</span><span style="color:var(--ground)"><i class="swatch"></i>GND</span><span style="color:var(--green)"><i class="swatch"></i>I²C</span><span style="color:var(--purple)"><i class="swatch"></i>PWM/方向</span><span style="color:var(--cyan)"><i class="swatch"></i>电机输出</span></div>
 
-    <div class="diagram-shell">
+    <div class="diagram-shell" role="region" aria-label="完整自适应接线图">
       <svg viewBox="0 0 1800 1040" role="img" aria-labelledby="svg-title svg-desc">
         <title id="svg-title">ESP32-CAM智能小车实物比例分层接线图</title>
         <desc id="svg-desc">面包板和模块按相对真实尺寸绘制，接口按照标准模块边缘位置排列。USB-A QC诱骗模块左侧为USB-A公头，右侧只有V正和V负输出端子。</desc>
@@ -138,9 +140,19 @@
           <text class="power-label" x="1180" y="692">3.3V → 两块VCC</text><text class="power-label" x="1180" y="720">3.3V → 两块STBY（常开）</text><text class="power-label" x="1190" y="760">公共GND → 两块GND</text>
         </g>
 
-        <!-- I2C层：两个不同高度的独立折线路径 -->
+        <!-- 两种安装状态共用同一份车轮接线定义，避免切换图层后出现不同接法。 -->
+        <defs>
+          <g id="wheel-i2c-fixed">
+            <path class="wire i2c" data-net="wheel-sda" d="M630 430 V284 H790 V504 H850"/>
+            <path class="wire i2c" stroke="var(--soft)" style="stroke:var(--soft);stroke-width:9" d="M570 430 V306 H812 V482 H850"/>
+            <path class="wire i2c" data-net="shared-scl" d="M570 430 V306 H812 V482 H850"/>
+            <text class="wire-label" x="650" y="276">GPIO13 → 车轮 SDA（固定）</text>
+            <text class="wire-label" x="650" y="330">GPIO14 → 车轮 SCL（固定）</text>
+            <text class="wire-label" x="650" y="390">GPIO12 始终不接</text>
+          </g>
+        </defs>
         <g data-layer="i2c" hidden>
-          <path class="wire i2c" data-net="sda" d="M630 430 V284 H790 V504 H850"/><path class="wire i2c" data-net="scl" d="M570 430 V306 H812 V482 H850"/><text class="wire-label" x="650" y="276">IO13 → SDA</text><text class="wire-label" x="650" y="322">IO14 → SCL</text>
+          <use href="#wheel-i2c-fixed"/>
         </g>
 
         <!-- 前轮控制：PCA CH0-5的S针到TB1真实控制针；水平轨高度全部不同 -->
@@ -167,7 +179,7 @@
         </g>
         <!-- 可选屏幕单独放在控制区下方；外壳尺寸为示意，针序按实物丝印。 -->
         <g id="oled" data-optional="oled">
-          <text class="zone" x="1200" y="820">可选 · 百问网 SSD1306 / 128×64</text>
+          <text class="zone" x="1200" y="820">可选 · SSD1306 OLED / 128×64</text>
           <rect class="pcb pcb-oled" x="850" y="790" width="330" height="220" rx="9"/>
           <rect class="oled-screen" x="890" y="860" width="250" height="125" rx="4"/>
           <text class="oled-text" x="910" y="885">CPU0: 35.2%</text><text class="oled-text" x="910" y="910">CPU1: 68.5%</text><text class="oled-text" x="910" y="935">EXP: 12.30 ms</text><text class="oled-text" x="910" y="960">AEC: ON</text>
@@ -194,6 +206,67 @@
           <path class="wire spi" data-net="oled-dc" d="M600 430 V400 H750 V675 H1030 V800"/>
           <text class="wire-label" x="580" y="683">U0R / GPIO3 → SCLK</text><text class="wire-label" x="550" y="709">U0T / GPIO1 → MOSI</text><text class="wire-label" x="765" y="669">IO15 → GPIO（D/C）</text>
         </g>
+        <!-- 机械臂使用独立驱动板与动力支路，保持 OLED 原接线不变。 -->
+        <g id="arm" data-optional="arm" hidden>
+          <text class="zone" x="48" y="1060">可选机械臂 · 第二块 PCA9685 · 现有 5V 分支供电 · 免焊接 · 可与 OLED 同时安装</text>
+          <rect class="focus-box" x="48" y="1120" width="620" height="120" rx="12"/>
+          <text class="module-label" x="70" y="1148">免焊接 · 只使用现有两块 XL4015</text>
+          <text class="module-note" x="70" y="1174">#1 保持 6V 给车轮；#2 保持稳压 5.0V，分支给逻辑与舵机。</text>
+          <text class="module-note" x="70" y="1197">两板均为 0x40；共用 SCL、分开 SDA，需配套固件。</text>
+          <text class="module-note" x="70" y="1220">不焊地址焊盘，不使用第三块降压板，不占用 OLED 引脚。</text>
+          <g id="pca-arm">
+            <rect class="pcb pcb-pca" x="850" y="1090" width="390" height="158" rx="8"/>
+            <text class="silk" x="970" y="1110" text-anchor="middle">机械臂 PCA9685 #2</text>
+            <text class="silk" x="970" y="1130" text-anchor="middle">0x40 · 50 Hz</text>
+            <rect class="terminal" x="1050" y="1120" width="64" height="40" rx="4"/><circle class="terminal-hole" cx="1066" cy="1140" r="6"/><circle class="terminal-hole" cx="1098" cy="1140" r="6"/>
+            <text class="silk-small" x="1066" y="1129" text-anchor="middle">V+</text><text class="silk-small" x="1098" y="1129" text-anchor="middle">GND</text>
+            <text class="silk-small" x="1130" y="1115">焊盘全部保持开路</text><text class="silk-small" x="1130" y="1135">默认地址 0x40</text><text class="silk-small" x="1130" y="1155">无需焊接</text>
+            <g id="arm-control"></g><g id="arm-channels"></g>
+          </g>
+          <g id="servo-one"><rect class="pcb pcb-buck" x="1420" y="1120" width="145" height="95" rx="10"/><circle class="metal" cx="1535" cy="1160" r="18"/><text class="silk" x="1490" y="1200" text-anchor="middle">SG90 · 关节 1</text></g>
+          <g id="servo-two"><rect class="pcb pcb-buck" x="1420" y="1320" width="145" height="95" rx="10"/><circle class="metal" cx="1535" cy="1360" r="18"/><text class="silk" x="1490" y="1400" text-anchor="middle">SG90 · 关节 2</text></g>
+          <text class="module-note" x="850" y="1290">按照片：黄色 PWM / 红色 V+ / 黑色 GND；按板上数字核对通道。</text>
+          <text class="module-note" x="850" y="1310">图中控制口朝左、输出排针朝下；端子极性以实物丝印为准。</text>
+          <text class="module-note" x="48" y="1280">舵机电源从 #2 输出直达绿色端子，不经过面包板。</text>
+          <text class="module-note" x="48" y="1300">SG90 使用稳压 5.0V；#2 总负载包含 ESP32、OLED 与两舵机。</text>
+          <text class="module-note" x="48" y="1320">共地、分支回流；不得把 5V 与 #1 的 6V 正极并接。</text>
+          <text class="module-label" x="850" y="1455">配套固件已加入机械臂控制；实机待验证，GPIO2 的 SDA 线烧录前断开。</text>
+        </g>
+        <!-- 同一个 5V 输出分成逻辑与舵机支路；圆点表示实际连接，其他交叉不连接。 -->
+        <g data-layer="arm-power" data-optional="arm" hidden>
+          <path class="wire power heavy" data-net="arm-vplus" d="M273 531 H335 V1078 H1280 V1140 H1066"/>
+          <path class="wire ground heavy" data-net="arm-power-gnd" d="M273 569 H315 V1370 H1300 V1140 H1098"/>
+          <path class="wire power" data-net="arm-vcc" d="M1200 618 H1320 V1025 H790 V1190 H850"/>
+          <path class="wire ground" data-net="arm-logic-gnd" d="M1180 638 H1340 V1045 H770 V1110 H850 M770 1110 V1370 H1300 M770 1130 H850"/>
+          <circle class="endpoint-ground" cx="770" cy="1130" r="5"/><circle class="endpoint-ground" cx="1300" cy="1370" r="5"/>
+          <circle class="endpoint-power" cx="273" cy="531" r="6"/><circle class="endpoint-ground" cx="273" cy="569" r="6"/>
+          <circle class="endpoint-power" cx="1066" cy="1140" r="6"/><circle class="endpoint-ground" cx="1098" cy="1140" r="6"/>
+          <text class="wire-label" x="390" y="1070">现有 XL4015 #2 OUT+（5.0V）→ 新板 V+</text>
+          <text class="wire-label" x="390" y="1360">#2 OUT− → 新板 GND；公共地 / OE 在此支路共地</text>
+          <text class="wire-label" x="1350" y="1020">3.3V → VCC</text>
+        </g>
+        <!-- 两根 SDA 电气隔离；共用的时钟由统一软件驱动串行调度，禁止两个控制器同时驱动。 -->
+        <g data-layer="arm-i2c" data-optional="arm" hidden>
+          <use href="#wheel-i2c-fixed"/>
+          <path class="wire i2c" data-net="arm-sda" d="M540 430 V320 H760 V1170 H850"/>
+          <path class="wire i2c" style="stroke:var(--soft);stroke-width:9" d="M812 482 V1150 H850"/>
+          <path class="wire i2c" data-net="arm-scl-branch" d="M812 482 V1150 H850"/>
+          <circle class="dot" cx="812" cy="482" r="5" fill="var(--green)"/>
+          <text class="wire-label" x="390" y="1010">原车轮线保持不动；只新增 GPIO2 → 机械臂 SDA</text>
+          <text class="wire-label" x="390" y="1040">机械臂 SCL 分支接 GPIO14；GPIO12 两种状态均不接</text>
+          <text class="wire-label" x="70" y="1260">两板均 0x40，SDA 分开；仅实心圆点连接，交叉处的留白表示不连接</text>
+          <text class="wire-label" x="70" y="1284">GPIO2 的新增 SDA 线烧录前断开；共享 SCL 需统一软件 I²C 驱动</text>
+        </g>
+        <g data-layer="arm-servo" data-optional="arm" hidden>
+          <path class="wire control" d="M1183 1200 V1335 H1360 V1140 H1420"/>
+          <path class="wire power" d="M1183 1218 V1350 H1380 V1160 H1420"/>
+          <path class="wire ground" d="M1183 1236 V1365 H1400 V1180 H1420"/>
+          <path class="wire control" d="M1205 1200 V1385 H1360 V1340 H1420"/>
+          <path class="wire power" d="M1205 1218 V1400 H1380 V1360 H1420"/>
+          <path class="wire ground" d="M1205 1236 V1415 H1400 V1380 H1420"/>
+          <text class="wire-label" x="1580" y="1144">橙 / 黄 → CH14 PWM</text><text class="wire-label" x="1580" y="1164">红 → CH14 V+</text><text class="wire-label" x="1580" y="1184">棕 → CH14 GND</text>
+          <text class="wire-label" x="1580" y="1344">橙 / 黄 → CH15 PWM</text><text class="wire-label" x="1580" y="1364">红 → CH15 V+</text><text class="wire-label" x="1580" y="1384">棕 → CH15 GND</text>
+        </g>
       </svg>
     </div>
   </section>
@@ -203,7 +276,7 @@
     <div class="grid">
       <article class="info"><h3>USB-A QC触发板</h3><p>左侧USB-A公头直接插充电宝；右侧只有两个输出端子V+、V−。没有IN+、IN−，也不是USB-C PD诱骗板。</p></article>
       <article class="info"><h3>TB6612FNG小板</h3><p>采用SparkFun式0.8×0.8英寸两排8针布局。控制排为PWMA、AIN2、AIN1、STBY、BIN1、BIN2、PWMB、GND。</p></article>
-      <article class="info"><h3>PCA9685常见16路板</h3><p>上下各8组输出，每组为信号S、电源+、地−；左右短边为I²C控制排针。本车只使用每组的S针，V+不连接。</p></article>
+      <article class="info"><h3>PCA9685常见16路板</h3><p>上下各8组输出，每组为信号S、电源+、地−；左右短边为I²C控制排针。原车轮板只使用每组的S针，V+不连接；可选机械臂板 V+ 接现有 5V 的独立分支。</p></article>
     </div>
     <div class="warning"><strong>实物核对要求：</strong>淘宝模块可能存在不同PCB版本。收到QC、PCA9685和TB6612后，应以板上丝印为最终依据；如果排针顺序与图中不同，请拍摄模块正反面，我可以按你的确切版本逐孔重画。</div>
   </section>
@@ -214,18 +287,50 @@
   </section>
 
   <section class="panel two-col" aria-labelledby="power-map-title">
-    <div><h2 id="power-map-title">XL4015端子逐孔对应</h2><table><thead><tr><th>模块端子</th><th>连接到</th></tr></thead><tbody><tr><td>两块XL4015的 IN+</td><td>QC触发板 V+（先确认已触发12V）</td></tr><tr><td>两块XL4015的 IN−</td><td>QC触发板 V−</td></tr><tr><td>#1 OUT+</td><td>调到6.0V后，连接两块TB6612的 VM</td></tr><tr><td>#1 OUT−</td><td>两块TB6612的GND，并与逻辑GND共地</td></tr><tr><td>#2 OUT+</td><td>调到5.0V后，连接面包板5V母线和ESP32-CAM 5V</td></tr><tr><td>#2 OUT−</td><td>面包板公共GND母线</td></tr></tbody></table></div>
+    <div><h2 id="power-map-title">XL4015端子逐孔对应</h2><table><thead><tr><th>模块端子</th><th>连接到</th></tr></thead><tbody><tr><td>两块XL4015的 IN+</td><td>QC触发板 V+（先确认已触发12V）</td></tr><tr><td>两块XL4015的 IN−</td><td>QC触发板 V−</td></tr><tr><td>#1 OUT+</td><td>调到6.0V后，连接两块TB6612的 VM</td></tr><tr><td>#1 OUT−</td><td>两块TB6612的GND，并与逻辑GND共地</td></tr><tr><td>#2 OUT+</td><td>调到5.0V后，连接面包板5V母线和ESP32-CAM 5V；安装机械臂时另从输出端分支至新板 V+</td></tr><tr><td>#2 OUT−</td><td>面包板公共GND母线</td></tr></tbody></table></div>
     <div><h2>TB6612供电逐针对应</h2><table><thead><tr><th>TB6612针脚</th><th>电源来源</th><th>用途</th></tr></thead><tbody><tr><td>VM</td><td>XL4015 #1 OUT+（6.0V）</td><td>四个TT电机的动力电源</td></tr><tr><td>VCC</td><td>ESP32-CAM 3V3 / 3.3V母线</td><td>TB6612逻辑电源</td></tr><tr><td>STBY</td><td>3.3V母线</td><td>拉高后驱动器保持工作</td></tr><tr><td>GND</td><td>公共GND</td><td>6V、5V、3.3V控制信号必须共地</td></tr></tbody></table></div>
   </section>
   <section class="panel" aria-labelledby="oled-map-title">
     <h2 id="oled-map-title">可选 OLED 接线与固件配置</h2>
-    <p class="subtle">百问网 SSD1306，128×64 单色，SPI 只写。上图针序按 Material 中的实物丝印；屏幕旋转后排针朝上，从左到右为 CS、SCLK、MISO、MOSI、GPIO、GND、3V3、5V。</p>
+    <p class="subtle">SSD1306 OLED，128×64 单色，SPI 只写。上图针序按 Material 中的实物丝印；屏幕旋转后排针朝上，从左到右为 CS、SCLK、MISO、MOSI、GPIO、GND、3V3、5V。</p>
     <table><thead><tr><th>OLED 丝印</th><th>连接到</th><th>作用</th></tr></thead><tbody>
       <tr><td>SCLK</td><td>U0R / GPIO3</td><td>SPI2 时钟，1MHz</td></tr><tr><td>MOSI</td><td>U0T / GPIO1</td><td>SPI2 数据输出</td></tr><tr><td>GPIO</td><td>IO15 / GPIO15</td><td>D/C，低电平命令、高电平数据</td></tr><tr><td>CS / GND</td><td>公共 GND</td><td>专用 SPI 总线持续选中，两个针均接地</td></tr><tr><td>MISO</td><td>不接</td><td>模块内部未连接</td></tr><tr><td>3V3</td><td>ESP32-CAM 3V3 / 3.3V 母线</td><td>逻辑及电荷泵相关电源</td></tr><tr><td>5V</td><td>XL4015 #2 的 5V 母线</td><td>屏幕 VCC，需与 3V3 同时接入</td></tr>
     </tbody></table>
     <p class="subtle">固件配置 CAMERA_OLED_ENABLED 可关闭此模块。默认启用并关闭 UART 控制台，每两秒显示 CPU0 / CPU1 忙碌率估算、相机积分时间估算及 AEC；首轮或无效数据为 --，曝光超过十秒未更新也显示 --。无需打开网页。</p>
     <div class="warning"><strong>串口复用：</strong>启用 OLED 时禁止 UART0 控制台输出。烧录前断开 OLED 的 U0T、U0R 两根信号线；烧录后移除烧写板再接回。未安装屏幕时可以关闭 OLED；SPI 无应答机制，软件无法判断屏幕是否实际接上。</div>
-    <p class="subtle">资料：<a href="https://ldd.100ask.net/zh/11_SPI/08_1.html">百问网 OLED 说明</a> · <a href="https://ldd.100ask.net/_images/49_oled_sch.png">模块原理图</a></p>
+    <p class="subtle">资料：<a href="https://ldd.100ask.net/zh/11_SPI/08_1.html">OLED 模块说明</a> · <a href="https://ldd.100ask.net/_images/49_oled_sch.png">模块原理图</a></p>
+  </section>
+  <section class="panel" aria-labelledby="fixed-pin-title">
+    <h2 id="fixed-pin-title">固定引脚分配：有无机械臂均不改车轮与 OLED 接线</h2>
+    <table><thead><tr><th>ESP32 引脚</th><th>不安装机械臂</th><th>安装机械臂</th></tr></thead><tbody>
+      <tr><td>GPIO12 / IO12</td><td>不接</td><td>仍不接</td></tr>
+      <tr><td>GPIO13 / IO13</td><td>车轮 PCA9685 SDA</td><td>保持接车轮 SDA，不移线</td></tr>
+      <tr><td>GPIO14 / IO14</td><td>车轮 PCA9685 SCL</td><td>车轮线保留，另分支至机械臂 SCL</td></tr>
+      <tr><td>GPIO2 / IO2（不是 GPIO12）</td><td>预留，不接</td><td>新增一根线到机械臂 SDA</td></tr>
+      <tr><td>GPIO1 / GPIO3 / GPIO15</td><td>按 OLED 可选方案接线</td><td>OLED 接线保持不变</td></tr>
+    </tbody></table>
+    <p class="subtle">关闭机械臂选项不改变基础接线。第 3 层与第 8B 层引用同一份车轮接线；8B 只增加机械臂分支。图中交叉留白表示不连接，只有实心圆点表示分支连接。机械臂共享时钟方案仍需配套固件，不能仅靠网页勾选启用。</p>
+  </section>
+  <section class="panel" aria-labelledby="arm-map-title">
+    <h2 id="arm-map-title">可选机械臂：免焊接、两块 XL4015 方案</h2>
+    <p class="subtle">照片标签为 SG90 / Micro Servo 9g。常见 SG90 可用稳压 5V，但照片无法证明具体仿制品的额定范围与电流，仍以实物规格为准。本方案保留车轮板，新增照片中的机械臂板；两块 PCA9685 的地址焊盘均不改动。上方机械臂开关与 OLED 开关独立。</p>
+    <table><thead><tr><th>模块 / 信号</th><th>免焊接连接方法</th><th>条件与说明</th></tr></thead><tbody>
+      <tr><td>车轮板 SDA</td><td>保持 ESP32 GPIO13 → 原板 SDA</td><td>只接原板，不与机械臂 SDA 相连；原板地址 0x40，PWM 约 1017 Hz</td></tr>
+      <tr><td>机械臂板 SDA</td><td>ESP32 IO2 / GPIO2 → 新板 SDA</td><td>新增一根杜邦线；地址同为 0x40，但独立数据线避免两板同时应答</td></tr>
+      <tr><td>两板 SCL</td><td>GPIO14 分别接原板 SCL 和新板 SCL</td><td>共用一根时钟网；需统一的软件 I²C 驱动串行调度两个 SDA 分支，未选分支保持释放为高。不可创建两个同时工作的控制器驱动该引脚</td></tr>
+      <tr><td>新板 VCC / GND / OE</td><td>VCC 接 3.3V；GND 与 OE 均接公共地</td><td>VCC 为逻辑电源，两板的 SDA / SCL 上拉只能接 3.3V；OE 低有效，不能悬空</td></tr>
+      <tr><td>A0～A5 地址焊盘</td><td>全部保持出厂开路，不焊接、不短接</td><td>两板均为 7 位地址 0x40；不能把两板 SDA 也并起来。OE 仅控制 PWM 输出，不能用来隔离 I²C 地址</td></tr>
+      <tr><td>XL4015 #1</td><td>保持原 6.0V → 两块 TB6612 VM</td><td>只给车轮动力供电，不能把该正输出接入 5V 支路</td></tr>
+      <tr><td>XL4015 #2</td><td>保持稳压 5.0V；OUT+ / OUT− 单独分支直达新板绿色 V+ / GND 端子</td><td>原 ESP32 / OLED 供电支路保留；舵机电流不经过 ESP32 或面包板。使用免焊螺丝分线端子分支，所有 GND 共地，不增加第三块降压板</td></tr>
+      <tr><td>SG90 关节 1 / CH14</td><td>橙 / 黄信号 → 黄色 PWM；红 → 红色 V+；棕 → 黑色 GND</td><td>插头跨同一通道三种颜色，按板上数字确认 CH14</td></tr>
+      <tr><td>SG90 关节 2 / CH15</td><td>橙 / 黄信号 → 黄色 PWM；红 → 红色 V+；棕 → 黑色 GND</td><td>机械臂板单独设为 50 Hz；首次卸载机械臂，从约 1500μs 中位开始逐步校准，不直接推到极限</td></tr>
+      <tr><td>OLED</td><td>GPIO3 → SCLK、GPIO1 → MOSI、GPIO15 → D/C，保持原接线</td><td>与新增 GPIO2 不冲突；不使用 GPIO12，避免 I²C 上拉改变 Flash 启动电压；GPIO4 补光灯也不占用</td></tr>
+    </tbody></table>
+    <div class="warning"><strong>固件适配是必要条件：</strong>当前代码已统一采用软件 I²C，串行管理两块 PCA9685，并加入 ACK、超时、互斥、总线恢复、50 Hz 舵机输出和软件限位。配套控制台提供两个关节目标及释放指令；需要编译烧录更新固件，网页勾选不能启用硬件。尚未完成实机联动验证。</div>
+    <div class="warning"><strong>烧录前断线：</strong>GPIO2 接新板 SDA 后会被上拉。正常 Flash 启动时 GPIO0 为高，GPIO2 高电平不阻止该模式；进入串口下载模式时 GPIO2 必须低或悬空。因此烧录前断开新增 GPIO2→SDA 杜邦线，同时按 OLED 原要求断开 U0T / U0R，烧录结束并移除烧写板后恢复连接。TF 卡仍不使用。</div>
+    <div class="warning"><strong>共用 5V 的稳定性条件：</strong>按 ESP32、OLED 与两个 SG90 同时启动 / 堵转的总电流检查 XL4015 #2、QC 电源、导线与接头的实际能力，并留余量；模块标称电流不能代替带载测量。用星形分支减少舵机回流对逻辑供电的影响。若舵机动作导致 5V 掉压、ESP32 重启或视频断开，需先减小负载并改善供电，不能只靠改线保证全部模块稳定运行。</div>
+    <p class="subtle">本页勾选只切换图示，不控制硬件。此方案通过共用时钟、分开数据线节省 GPIO；配套固件默认启用可选机械臂，缺失时只禁用机械臂。首次上电无舵机输出，必须从控制台明确发送目标；实际效果仍需实机验证。</p>
+    <p class="subtle">资料：<a href="https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf">NXP PCA9685 数据手册</a> · <a href="https://docs.espressif.com/projects/esptool/en/latest/esp32/advanced-topics/boot-mode-selection.html">ESP32 启动引脚说明</a> · <a href="https://learn.adafruit.com/16-channel-pwm-servo-driver/pinouts">PCA9685 舵机电源说明</a></p>
   </section>
 </main>
 
@@ -256,17 +361,37 @@
   for(let ch=0;ch<8;ch+=1){const x=895+ch*44;circle(pcaChannels,x,430,4.2,'pin');circle(pcaChannels,x,440,4.2,ch<=7?'pin-used':'pin');circle(pcaChannels,x,450,4.2,'pin');text(pcaChannels,x,466,String(ch),'pin-name');text(pcaChannels,x-9,422,'−','pin-name');text(pcaChannels,x,422,'S','pin-name');text(pcaChannels,x+9,422,'+','pin-name')}
   for(let ch=8;ch<16;ch+=1){const x=895+(ch-8)*44;circle(pcaChannels,x,552,4.2,'pin');circle(pcaChannels,x,562,4.2,ch<=11?'pin-used':'pin');circle(pcaChannels,x,572,4.2,'pin');text(pcaChannels,x,547,String(ch),'pin-name');text(pcaChannels,x-9,588,'−','pin-name');text(pcaChannels,x,588,'S','pin-name');text(pcaChannels,x+9,588,'+','pin-name')}
 
+  const armControl=document.getElementById('arm-control');
+  // 控制针序按照片丝印；两端控制口电气相通，只需接一端。
+  const armNames=['GND','OE','SCL','SDA','VCC','V+'];
+  for(let i=0;i<armNames.length;i+=1){circle(armControl,850,1110+i*20,4.7,i===5?'pin':'pin-used');text(armControl,862,1113+i*20,armNames[i],'pin-name','start');}
+  const armChannels=document.getElementById('arm-channels');
+  // 按实物的黄信号、红电源、黑地排列；只有前两路接舵机。
+  for(let ch=0;ch<16;ch+=1){const x=875+ch*22;circle(armChannels,x,1200,4.2,ch>=14?'pin-used':'pin');circle(armChannels,x,1218,4.2,'endpoint-power');circle(armChannels,x,1236,4.2,'terminal-hole');text(armChannels,x,1188,String(ch),'pin-name');}
+
   const tbLeft=['PWMA','AIN2','AIN1','STBY','BIN1','BIN2','PWMB','GND'];
   const tbRight=['VM','VCC','GND','A01','A02','B02','B01','GND'];
   document.querySelectorAll('#tb1,#tb2').forEach(tb=>{const left=tb.querySelector('.tb-left'),right=tb.querySelector('.tb-right');tbLeft.forEach((name,i)=>{const y=11+i*20;circle(left,0,y,4.6,['PWMA','AIN2','AIN1','STBY','BIN1','BIN2','PWMB','GND'].includes(name)?'pin-used':'pin');text(left,12,y+3,name,'pin-name','start')});tbRight.forEach((name,i)=>{const y=11+i*20;circle(right,140,y,4.6,'pin-used');text(right,128,y+3,name,'pin-name','end')})});
 
-  const copy={placement:['模块摆放','模块使用真实长宽比例和边缘针脚位置。ESP32-CAM的摄像头朝右，PCA9685输出口朝上下。'],'qc-buck':['QC→两块降压板','橙线：QC V+接两块XL4015左侧IN+；深色线：QC V−接两块左侧IN−。XL4015右侧OUT端在这一层故意不接。'],'logic-power':['5V与3.3V逻辑供电','XL4015 #2右侧OUT+输出5.0V给ESP32；ESP32的3V3脚再给PCA9685 VCC和3.3V母线。所有深色线为公共GND。'],'driver-power':['TB6612双电源','每块TB6612的VM接XL4015 #1的6.0V；VCC和STBY接3.3V；GND必须同时与动力地和逻辑地共地。'],i2c:['I²C','GPIO13连接SDA，GPIO14连接SCL；两根折线使用不同走线槽。'],front:['前轮控制','CH0～CH5从PCA9685的实际S针连接到TB6612 #1对应控制针。线段可能交叉，但没有任何共线重叠。'],rear:['后轮控制','CH6～CH11连接TB6612 #2。每条线使用独立水平高度和独立垂直入口。'],motor:['电机输出','A01/A02和B01/B02分别用两根粗线直达四台TT电机，不进入面包板。']};
+  const copy={placement:['模块摆放','模块使用真实长宽比例和边缘针脚位置。ESP32-CAM的摄像头朝右，PCA9685输出口朝上下。'],'qc-buck':['QC→两块降压板','橙线：QC V+接两块XL4015左侧IN+；深色线：QC V−接两块左侧IN−。XL4015右侧OUT端在这一层故意不接。'],'logic-power':['5V与3.3V逻辑供电','XL4015 #2右侧OUT+输出5.0V给ESP32；ESP32的3V3脚再给PCA9685 VCC和3.3V母线。所有深色线为公共GND。'],'driver-power':['TB6612双电源','每块TB6612的VM接XL4015 #1的6.0V；VCC和STBY接3.3V；GND必须同时与动力地和逻辑地共地。'],i2c:['固定车轮 I²C','有无机械臂都保持 GPIO13→车轮 SDA、GPIO14→车轮 SCL；GPIO12 始终不接。安装机械臂只新增 GPIO2→机械臂 SDA 和 GPIO14 的 SCL 分支。交叉留白处不连接。'],front:['前轮控制','CH0～CH5从PCA9685的实际S针连接到TB6612 #1对应控制针。线段可能交叉，但没有任何共线重叠。'],rear:['后轮控制','CH6～CH11连接TB6612 #2。每条线使用独立水平高度和独立垂直入口。'],motor:['电机输出','A01/A02和B01/B02分别用两根粗线直达四台TT电机，不进入面包板。']};
   const buttons=[...document.querySelectorAll('[data-show]')],layers=[...document.querySelectorAll('[data-layer]')],stage=document.getElementById('stage');
   copy['oled-power']=['可选 OLED：供电','3V3 与 5V 均需接入；GND、CS 接公共地。两路正电源与地使用不同走线槽，地仅在实心圆点处分支。'];
   copy['oled-signal']=['可选 OLED：SPI','U0R / GPIO3 → SCLK，U0T / GPIO1 → MOSI，IO15 → GPIO（D/C）。圆弧为跨线桥，交越处不连接，无重叠线段。MISO 不接；UART 控制台必须关闭。'];
+  copy['arm-power']=['可选机械臂：共用现有 5V','XL4015 #2 保持 5.0V，OUT+ / OUT− 单独分支到新板 V+ / GND；原逻辑支路保留。新板 VCC 接 3.3V，OE 接地。不增加降压板；确认电流余量，舵机动力不走面包板。'];
+  copy['arm-i2c']=['可选机械臂：只增加分支','基础车轮接线与第 3 层完全相同，GPIO12 始终不接。仅新增 GPIO2→机械臂 SDA、GPIO14→机械臂 SCL；两板 SDA 不连接。两板均 0x40，需统一软件 I²C 驱动；GPIO2 新增线烧录前断开。'];
+  copy['arm-servo']=['可选机械臂：两个舵机','SG90 分别接新增板 CH14 / CH15：橙黄信号→黄色 PWM，红→红色 V+，棕→黑色 GND。先核对板上数字与丝印；该板需单独配置 50 Hz。'];
+  function toggleArm(){
+    const enabled=document.getElementById('arm-option').checked;
+    document.getElementById('arm').toggleAttribute('hidden',!enabled);
+    document.querySelector('svg').setAttribute('viewBox',enabled?'0 0 1800 1490':'0 0 1800 1040');
+    for(const button of buttons){if(button.dataset.show.startsWith('arm-'))button.disabled=!enabled;}
+    if(!enabled){for(const layer of layers){if(layer.dataset.layer.startsWith('arm-')&&!layer.hasAttribute('hidden'))buttons[0].click();}}
+  }
+  document.getElementById('arm-option').addEventListener('change',toggleArm);
   function toggleOled(){const enabled=document.getElementById('oled-option').checked;document.getElementById('oled').toggleAttribute('hidden',!enabled);for(const button of buttons){if(button.dataset.show.startsWith('oled-'))button.disabled=!enabled;}if(!enabled){for(const layer of layers){if(layer.dataset.layer.startsWith('oled-')&&!layer.hasAttribute('hidden'))buttons[0].click();}}}
   document.getElementById('oled-option').addEventListener('change',toggleOled);
   buttons.forEach(button=>button.addEventListener('click',()=>{const selected=button.dataset.show;buttons.forEach(item=>item.setAttribute('aria-pressed',String(item===button)));layers.forEach(layer=>layer.toggleAttribute('hidden',layer.dataset.layer!==selected));const [title,body]=copy[selected];stage.replaceChildren();const strong=document.createElement('strong');strong.textContent=title;stage.append(strong,document.createTextNode(body));}));
+  toggleArm();
 </script>
 </body>
 </html>
