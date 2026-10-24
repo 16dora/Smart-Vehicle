@@ -28,8 +28,8 @@ public:
     ArmControl& operator=(const ArmControl&) = delete;
     // 输入：无；输出：结果；作用：关闭历史输出并配置 50 Hz，不自动回中。
     esp_err_t start();
-    // 输入：关节、角度、代次；输出：结果；作用：限位校验后提交一次目标。
-    esp_err_t setTarget(int joint, int angle, uint32_t generation);
+    // 输入：关节、角度、代次；输出：结果；作用：限位校验后提交目标；relative 为真时按有符号角度增量推进，需先设置初始目标。
+    esp_err_t setTarget(int joint, int angle, uint32_t generation, bool relative = false);
     // 输入：无；输出：结果；作用：关闭两路 PWM 并作废旧请求。
     esp_err_t release();
     // 输入：无；输出：无；作用：网络回调非阻塞地作废旧请求，保持关节扭矩。

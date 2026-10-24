@@ -24,6 +24,7 @@
     .runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px}.runtime .number{font-size:20px}
     .drive-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:400px;margin:16px auto 8px}
     .drive-turn{display:flex;gap:8px;max-width:400px;margin:auto}.drive-turn button{flex:1}
+    [data-arm-step]{touch-action:none;user-select:none}
     [data-drive]{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
     [data-drive].held{background:#66b8f6;color:#071422}.drive-stop{background:#7b353c;border-color:#c16a72}
     .arm-joint{margin:16px 0;padding:14px;border:1px solid #425672;border-radius:10px}.arm-joint .toolbar{margin-top:10px}#armMessage{line-height:1.8;color:#b6d9f8}
@@ -97,20 +98,21 @@
         <p class="muted">指令中断约 0.5 秒自动停车。当前按 X 型麦轮布局混控，仅使用一个控制页面操作。</p>
       </div>
       <section class="drive" aria-label="可选机械臂控制">
+        <p class="muted">键盘：W/S 前后，A/D 左右平移，Q/E 左上/右上，Z/C 左下/右下，R/F 原地左右转；空格停车。按住行驶，松开停车。</p>
         <h2>机械臂 <span class="badge" id="armState">等待状态</span></h2>
-        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。</p>
+        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。先发送初始角度，再按住增减按钮，每次推进 15°，松开保持；到软件限位停止增减。</p>
         <fieldset id="armSettings" disabled>
           <div class="arm-joint">
-            <label for="armAngle0">关节 1 / CH0 · <span id="armTarget0">未给定目标</span></label>
+            <label for="armAngle0">关节 1 / CH14 · <span id="armTarget0">未给定目标</span></label>
             <input id="armAngle0" type="number" min="30" max="150" step="1" value="90">
             <p class="muted" id="armLimits0">等待软件限位</p>
-            <div class="toolbar"><button type="button" data-arm-joint="0">发送关节 1 目标</button></div>
+            <div class="toolbar"><button type="button" data-arm-joint="0">发送关节 1 目标</button><button type="button" data-arm-step="decrease" data-arm-joint="0">按住减小</button><button type="button" data-arm-step="increase" data-arm-joint="0">按住增加</button></div>
           </div>
           <div class="arm-joint">
-            <label for="armAngle1">关节 2 / CH1 · <span id="armTarget1">未给定目标</span></label>
+            <label for="armAngle1">关节 2 / CH15 · <span id="armTarget1">未给定目标</span></label>
             <input id="armAngle1" type="number" min="30" max="150" step="1" value="90">
             <p class="muted" id="armLimits1">等待软件限位</p>
-            <div class="toolbar"><button type="button" data-arm-joint="1">发送关节 2 目标</button></div>
+            <div class="toolbar"><button type="button" data-arm-joint="1">发送关节 2 目标</button><button type="button" data-arm-step="decrease" data-arm-joint="1">按住减小</button><button type="button" data-arm-step="increase" data-arm-joint="1">按住增加</button></div>
           </div>
           <button type="button" id="armRelease" class="drive-stop">释放两个关节（承重时可能下垂）</button>
         </fieldset>
@@ -650,7 +652,7 @@ function beginDrive(event) {
   event.preventDefault();
   driveButton = event.currentTarget;
   drivePointer = event.pointerId;
-  driveButton.setPointerCapture(event.pointerId);
+  if (event.pointerId !== undefined) driveButton.setPointerCapture(event.pointerId);
   driveButton.classList.add('held');
   driveError = '';
   driveArmed = false;
@@ -769,6 +771,31 @@ function pressMotorStop() {
   stopDrive();
 }
 
+// 键盘复用现有方向按钮及续租机制；重复按键不重启操作，松开不恢复旧方向。
+let driveKey = '';
+const driveKeys = {KeyW:[1,0,0],KeyS:[-1,0,0],KeyA:[0,-1,0],KeyD:[0,1,0],
+  KeyQ:[1,-1,0],KeyE:[1,1,0],KeyZ:[-1,-1,0],KeyC:[-1,1,0],KeyR:[0,0,-1],KeyF:[0,0,1]};
+function driveKeyDown(event) {
+  if (event.code === 'Space' && !event.target.closest('input,textarea,select,[contenteditable]')) {
+    event.preventDefault(); driveKey = ''; stopDrive(); return;
+  }
+  const axes = driveKeys[event.code];
+  if (!axes || event.repeat || event.ctrlKey || event.altKey || event.metaKey || document.hidden ||
+      event.target.closest('input,textarea,select,[contenteditable]')) return;
+  event.preventDefault();
+  if (motorSettings.disabled || driveButton) return;
+  const button = document.querySelector('[data-drive][data-forward="' + axes[0] + '"][data-right="' + axes[1] + '"][data-turn="' + axes[2] + '"]');
+  driveKey = event.code;
+  beginDrive({currentTarget:button,button:0,preventDefault:preventKeyDefault});
+}
+function preventKeyDefault() {}
+function driveKeyUp(event) {
+  if (event.code !== driveKey) return;
+  event.preventDefault(); driveKey = ''; stopDrive();
+}
+document.addEventListener('keydown', driveKeyDown);
+document.addEventListener('keyup', driveKeyUp);
+
 for (const button of document.querySelectorAll('[data-drive]')) {
   button.addEventListener('pointerdown', beginDrive);
   button.addEventListener('lostpointercapture', loseDrivePointer);
@@ -813,7 +840,7 @@ let armPolling = false;
 // 输入：状态；输出：无；作用：更新限位和最后目标，不覆盖用户未提交的输入。
 function updateArm(state) {
   armSnapshot = state;
-  armSettings.disabled = armBusy || !state.enabled || !state.ready;
+  armSettings.disabled = (armBusy && !armStepButton) || !state.enabled || !state.ready;
   document.getElementById('armState').textContent = !state.enabled ? '未启用' : state.ready ? '可操作' : '不可用';
   for (let joint = 0; joint < 2; joint += 1) {
     const input = document.getElementById('armAngle' + joint);
@@ -852,27 +879,36 @@ async function pollArm() {
 async function commandArm(event) {
   if (armBusy || armPolling || !armSnapshot || !armSnapshot.ready) return;
   const release = event.currentTarget.id === 'armRelease';
-  const body = new URLSearchParams({action: release ? 'release' : 'set'});
+  const stepAction = event.currentTarget.dataset.armStep;
+  if (!stepAction) stopArmStep();
+  const body = new URLSearchParams({action: release ? 'release' : stepAction || 'set'});
   let limitText = '';
   if (!release) {
     const joint = Number(event.currentTarget.dataset.armJoint);
     const input = document.getElementById('armAngle' + joint);
     const angle = Number(input.value);
-    if (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint]) {
+    if (!stepAction && (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint])) {
       document.getElementById('armMessage').textContent = '关节 ' + (joint + 1) + ' 超出软件范围，指令未发送。';
       return;
     }
     body.set('joint', joint);
-    body.set('angle', angle);
+    if (stepAction) body.set('step', 15);
+    else body.set('angle', angle);
     body.set('generation', armSnapshot.generation);
     if (angle === armSnapshot.minimum[joint]) limitText = '已达到设定下限；';
     if (angle === armSnapshot.maximum[joint]) limitText = '已达到设定上限；';
   }
   armBusy = true;
-  armSettings.disabled = true;
+  if (!stepAction) armSettings.disabled = true;
   try {
     const state = JSON.parse(await request(armUrl.href, {method: 'POST', body, timeout: 1500}));
     updateArm(state);
+    if (stepAction) {
+      const joint = Number(event.currentTarget.dataset.armJoint);
+      const atLimit = state.angles[joint] === (stepAction === 'increase' ? state.maximum[joint] : state.minimum[joint]);
+      limitText = atLimit ? '已达到软件限位；' : '';
+      if (atLimit) stopArmStep();
+    }
     document.getElementById('armMessage').textContent = release ? '两个关节输出已释放，请注意承重机械臂。' : limitText + '目标已写入，不能据此确认实际到位。';
   } catch (error) {
     armSnapshot = null;
@@ -883,7 +919,47 @@ async function commandArm(event) {
   }
 }
 
-for (const button of document.querySelectorAll('[data-arm-joint]')) button.addEventListener('click', commandArm);
+for (const button of document.querySelectorAll('[data-arm-joint]:not([data-arm-step])')) button.addEventListener('click', commandArm);
+// 每次确认后才发送下一步；松开只撤销后续发送，不释放关节承重力矩。
+let armStepButton = null;
+let armStepTimer = 0;
+let armStepVersion = 0;
+function stopArmStep() {
+  armStepButton = null; ++armStepVersion;
+  clearTimeout(armStepTimer);
+}
+async function repeatArmStep() {
+  const button = armStepButton;
+  const version = armStepVersion;
+  if (!button || document.hidden || pageLeaving) return;
+  if (armBusy || armPolling) { armStepTimer = setTimeout(repeatArmStep, 100); return; }
+  await commandArm({currentTarget:button});
+  if (version !== armStepVersion || !armStepButton) return;
+  if (!armSnapshot || !armSnapshot.ready) { stopArmStep(); return; }
+  armStepTimer = setTimeout(repeatArmStep, 100);
+}
+function beginArmStep(event) {
+  if (event.button !== 0 || armBusy || !armSnapshot || !armSnapshot.ready) return;
+  event.preventDefault();
+  const joint = Number(event.currentTarget.dataset.armJoint);
+  if (armSnapshot.angles[joint] < 0) {
+    document.getElementById('armMessage').textContent = '请先发送该关节的初始目标角度，再进行连续增减。'; return;
+  }
+  stopArmStep(); armStepButton = event.currentTarget;
+  armStepButton.setPointerCapture(event.pointerId);
+  repeatArmStep();
+}
+for (const button of document.querySelectorAll('[data-arm-step]')) {
+  button.addEventListener('pointerdown', beginArmStep);
+  button.addEventListener('lostpointercapture', stopArmStep);
+  button.addEventListener('contextmenu', preventDriveMenu);
+}
+document.addEventListener('pointerup', stopArmStep);
+document.addEventListener('pointercancel', stopArmStep);
+window.addEventListener('blur', stopArmStep);
+window.addEventListener('pagehide', stopArmStep);
+function hideArmStep() { if (document.hidden) stopArmStep(); }
+document.addEventListener('visibilitychange', hideArmStep);
 document.getElementById('armRelease').addEventListener('click', commandArm);
 pollArm();
 setInterval(pollArm, 2000);

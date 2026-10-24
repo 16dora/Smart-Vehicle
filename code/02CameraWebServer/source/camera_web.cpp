@@ -1004,9 +1004,11 @@ esp_err_t CameraWeb::setArm(httpd_req_t* req)
         // 明确释放操作无需代次，总能撤销旧指令；释放后承重机械臂可能下垂。
         result = m_arm.release();
     }
-    else if (result == ESP_OK && std::strcmp(action, "set") == 0)
+    else if (result == ESP_OK && (std::strcmp(action, "set") == 0 || std::strcmp(action, "increase") == 0 || std::strcmp(action, "decrease") == 0))
     {
-        const char* names[] = {"joint", "angle", "generation"};
+        // 增减命令每次只推进 1～15 度，不在设备端排队或自动持续运动。
+        const bool relative = std::strcmp(action, "set") != 0;
+        const char* names[] = {"joint", relative ? "step" : "angle", "generation"};
         unsigned long values[3] = {};
         for (size_t index = 0; index < 3 && result == ESP_OK; ++index)
         {
@@ -1026,7 +1028,13 @@ esp_err_t CameraWeb::setArm(httpd_req_t* req)
             if (errno != 0 || end == field || *end != '\0' || values[index] > UINT32_MAX) result = ESP_ERR_INVALID_ARG;
         }
         if (result == ESP_OK && (values[0] > 1 || values[1] > 180)) result = ESP_ERR_INVALID_ARG;
-        if (result == ESP_OK) result = m_arm.setTarget(int(values[0]), int(values[1]), uint32_t(values[2]));
+        if (result == ESP_OK && relative && (values[1] < 1 || values[1] > 15)) result = ESP_ERR_INVALID_ARG;
+        if (result == ESP_OK)
+        {
+            // 方向由动作名确定，避免表单正负号与 URL 编码产生歧义。
+            const int angle = std::strcmp(action, "decrease") == 0 ? -int(values[1]) : int(values[1]);
+            result = m_arm.setTarget(int(values[0]), angle, uint32_t(values[2]), relative);
+        }
     }
     else if (result == ESP_OK) result = ESP_ERR_INVALID_ARG;
     if (result == ESP_OK)

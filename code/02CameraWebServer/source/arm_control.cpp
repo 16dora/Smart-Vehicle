@@ -62,16 +62,25 @@ esp_err_t ArmControl::start()
 }
 
 // 输入：关节、角度与代次；输出：结果；作用：严格拒绝越界及过期命令，只控制目标通道。
-esp_err_t ArmControl::setTarget(int joint, int angle, uint32_t generation)
+esp_err_t ArmControl::setTarget(int joint, int angle, uint32_t generation, bool relative)
 {
-    ESP_LOGI(TAG, "setTarget() >> joint=%d angle=%d generation=%lu", joint, angle, (unsigned long)generation);
+    ESP_LOGI(TAG, "setTarget() >> joint=%d angle=%d generation=%lu relative=%d", joint, angle, (unsigned long)generation, relative);
     std::lock_guard<std::mutex> lock(m_mutex);
     esp_err_t result = ESP_ERR_NOT_SUPPORTED;
 #if CONFIG_ARM_ENABLED
     if (!m_state.ready || generation != m_generation.load()) result = ESP_ERR_INVALID_STATE;
-    else if (joint < 0 || joint > 1 || angle < m_state.minimum[joint] || angle > m_state.maximum[joint]) result = ESP_ERR_INVALID_ARG;
+    else if (joint < 0 || joint > 1) result = ESP_ERR_INVALID_ARG;
+    else if (relative && (m_state.angles[joint] < 0 || angle == 0 || angle < -15 || angle > 15)) result = ESP_ERR_INVALID_ARG;
+    else if (!relative && (angle < m_state.minimum[joint] || angle > m_state.maximum[joint])) result = ESP_ERR_INVALID_ARG;
     else
     {
+        // 增量在业务锁内基于最后确认目标计算，到软件边界后保持边界角度。
+        if (relative)
+        {
+            angle += m_state.angles[joint];
+            if (angle < m_state.minimum[joint]) angle = m_state.minimum[joint];
+            if (angle > m_state.maximum[joint]) angle = m_state.maximum[joint];
+        }
         // 角度为标称目标；1000～2000 us 对应 0～180 度，实际行程需卸载后校准。
         const unsigned pulseUs = 1000 + unsigned(angle) * 1000 / 180;
         const unsigned ticks = (pulseUs * 25 + 61) / 122;
