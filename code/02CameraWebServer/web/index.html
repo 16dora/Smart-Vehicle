@@ -66,6 +66,7 @@
         <button class="primary" id="start" disabled>开始预览</button>
         <button id="stop" disabled>停止预览</button>
         <a class="button" href="/capture" target="_blank" rel="noopener">查看单张照片</a>
+        <button type="button" id="ledToggle" aria-pressed="false" disabled>打开补光灯</button>
       </div>
       <div class="control-panels">
       <div class="drive">
@@ -96,7 +97,7 @@
       </div>
       <section class="drive" aria-label="可选机械臂控制">
         <h2>机械臂控制</h2>
-        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。先发送初始角度，再按住增减按钮，每次推进 15°，松开保持；到软件限位停止增减。</p>
+        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。先发送初始角度，再按住增减按钮，每条指令目标增减 15°，本地小步平滑推进；松开保持，软件限位自动停止。</p>
         <fieldset id="armSettings" disabled>
           <div class="arm-joint">
             <label for="armAngle0">关节 1 / CH14 · <span id="armTarget0">未给定目标</span></label>
@@ -227,6 +228,24 @@ let reconnectAtMs = 0;
 let sendBlockedMs = 0;
 // 页面退出后不再自动重建控制连接。
 let pageLeaving = false;
+
+// 机械臂复用运动连接，命令代次和回报序号独立，不创建第二条控制连接。
+const armSettings = document.getElementById('armSettings');
+let armSnapshot = null;
+let armBusy = false;
+let armPendingSeq = 0;
+let armPendingAt = 0;
+let armReportSeq = 0;
+let armAckMs = 0;
+let armQueryMs = 0;
+let armStepButton = null;
+let armStepPointer = null;
+let armStepTimer = 0;
+// 补光灯设置使用独立版本，轮询旧回报不能覆盖刚确认的开关。
+let ledKnown = null;
+let ledBusy = false;
+let ledVersion = 0;
+
 
 // 输入：文本和错误标识；输出：无；作用：集中显示操作结果。
 function showMessage(text, error = false) {
@@ -368,12 +387,14 @@ async function pollStatus() {
   if (saving || polling) return;
   polling = true;
   const version = settingsVersion;
+  const ledReadVersion = ledVersion;
   try {
     const state = JSON.parse(await request('/status'));
     // 设置提交期间，旧轮询响应不覆盖页面中的最新操作结果。
     if (saving || version !== settingsVersion) return;
     updateRuntime(state);
     updateExposure(state);
+    if (!ledBusy && ledReadVersion === ledVersion) updateLed(state);
     document.getElementById('actualFps').textContent = state.actual_fps.toFixed(1);
     document.getElementById('limitFps').textContent = state.max_fps;
     document.getElementById('connection').textContent = state.connected ? '设备在线' : '网络未连接';
@@ -388,6 +409,7 @@ async function pollStatus() {
     // 设置成功后，旧轮询的迟到失败也不能禁用已经恢复的控件。
     if (saving || version !== settingsVersion) return;
     updateRuntime(null);
+    if (!ledBusy && ledReadVersion === ledVersion) updateLed(null);
     document.getElementById('connection').textContent = error.kind === 'timeout' ? '设备响应超时' : '状态读取失败';
     showMessage(describeError(error), true);
     initialized = false;
@@ -509,6 +531,7 @@ function clearDrive() {
 
 // 输入：说明；输出：无；作用：停止续期并关闭连接，已有运动时仅尝试一次 HTTP 备用停车。
 function failMotorLink(message) {
+  loseArmLink(message);
   const hadDrive = Boolean(driveButton || driveArmed || waitMode);
   clearDrive();
   driveError = message;
@@ -558,11 +581,12 @@ function sendMotorFrame(kind, forward = 0, right = 0, turn = 0) {
 // 输入：连接事件；输出：无；作用：连接建立后先读取状态，不发送非零运动目标。
 function motorOpened(event) {
   if (event.currentTarget !== motorSocket) return;
+  armReportSeq = 0;
   socketOpenedMs = performance.now();
   lastReportMs = socketOpenedMs;
   lastQueryMs = socketOpenedMs;
   document.getElementById('motorState').textContent = '正在读取电机状态';
-  sendMotorFrame(0);
+  sendMotorFrame(0); sendArmFrame(8);
 }
 
 // 输入：紧凑状态文本；输出：无；作用：反馈与续期解耦，停车确认后才激活当前按住。
@@ -571,6 +595,7 @@ function motorReported(event) {
   let report;
   try {
     report = JSON.parse(event.data);
+    if (report.type === 'arm') { receiveArm(report); return; }
     if (!Number.isInteger(report.s) || !Number.isInteger(report.g) || report.s <= 0 ||
         report.s > socketSeq || report.s < reportSequence || report.g < 0 || report.g > 0xffffffff ||
         !Number.isInteger(report.c) || !Number.isInteger(report.f) ||
@@ -842,142 +867,194 @@ stopButton.addEventListener('click', stopPreview);
 video.addEventListener('error', streamFailed);
 pollStatus();
 setInterval(pollStatus, 2000);
-// 机械臂与车轮分开查询，所有命令逐个提交，不重试或排队回放旧动作。
-const armUrl = new URL('/arm', motorUrl);
-const armSettings = document.getElementById('armSettings');
-// 最后读取到的状态仅含目标，没有舵机实际角度反馈。
-let armSnapshot = null;
-// 命令与轮询互斥；迟到的旧轮询不能覆盖新命令结果。
-let armBusy = false;
-// 状态读取串行进行，网络失败时禁用动作并等待下轮重新查询。
-let armPolling = false;
-
-// 输入：状态；输出：无；作用：更新限位和最后目标，不覆盖用户未提交的输入。
+// 输入：机械臂快照；输出：无；作用：区分目标与最后下发角度，不宣称实际位置。
 function updateArm(state) {
   armSnapshot = state;
-  armSettings.disabled = (armBusy && !armStepButton) || !state.enabled || !state.ready;
-  document.getElementById('armState').textContent = !state.enabled ? '未启用' : state.ready ? '可操作' : '不可用';
+  armSettings.disabled = armBusy || !state.enabled || !state.ready || !motorSocket || motorSocket.readyState !== WebSocket.OPEN;
+  document.getElementById('armState').textContent = !state.enabled ? '未启用' : !state.ready ? '不可用' : state.slewing.some(Boolean) ? '平滑运动中' : '可操作';
   for (let joint = 0; joint < 2; joint += 1) {
     const input = document.getElementById('armAngle' + joint);
-    input.min = state.minimum[joint];
-    input.max = state.maximum[joint];
+    input.min = state.minimum[joint]; input.max = state.maximum[joint];
     document.getElementById('armLimits' + joint).textContent = '软件范围 ' + input.min + '°～' + input.max + '°';
-    const angle = state.angles[joint];
-    document.getElementById('armTarget' + joint).textContent = angle < 0 ? '未给定目标' :
-      '最后目标 ' + angle + '° · ' + (state.holding[joint] ? '保持输出' : '已释放');
+    document.getElementById('armTarget' + joint).textContent = state.angles[joint] < 0 ? '未给定目标' :
+      '最后下发 ' + state.angles[joint] + '° / 目标 ' + state.targets[joint] + '° · ' + (state.holding[joint] ? '保持输出' : '已释放');
   }
 }
 
-// 输入：无；输出：无；作用：低频获取机械臂状态，初始化和恢复连接均不自动发送角度。
-async function pollArm() {
-  if (armBusy || armPolling || document.hidden || pageLeaving) return;
-  armPolling = true;
-  try {
-    const state = JSON.parse(await request(armUrl.href, {timeout: 1500}));
-    if (armBusy || pageLeaving) return;
-    const first = armSnapshot === null;
-    updateArm(state);
-    if (first && state.ready) document.getElementById('armMessage').textContent = '机械臂已就绪，尚未发送新动作；请先卸载连杆校准。';
-    if (!state.enabled) document.getElementById('armMessage').textContent = '当前固件关闭机械臂。';
-    else if (!state.ready) document.getElementById('armMessage').textContent = '机械臂板缺失或驱动故障：' + state.fault + '。车轮与相机可独立使用。';
-  } catch (error) {
-    armSnapshot = null;
-    armSettings.disabled = true;
-    document.getElementById('armState').textContent = '状态未知';
-    document.getElementById('armMessage').textContent = '状态读取失败，不自动重发动作；断网时可能仍保持输出。';
-  } finally {
-    armPolling = false;
-  }
+// 输入：动作、关节和数值；输出：发送序号；作用：共用控制连接，机械臂使用独立代次。
+function sendArmFrame(kind, joint = 0, value = 0) {
+  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN || motorSocket.bufferedAmount > 0 || socketSeq >= 0xfffffffe) return 0;
+  const data = new ArrayBuffer(12);
+  const view = new DataView(data);
+  view.setUint8(0, kind); view.setUint8(1, joint); view.setUint8(2, value); view.setUint8(3, 0);
+  view.setUint32(4, armSnapshot ? armSnapshot.generation : 0, false);
+  const sequence = ++socketSeq;
+  view.setUint32(8, sequence, false);
+  try { motorSocket.send(data); return sequence; }
+  catch (error) { return 0; }
 }
 
-// 输入：按钮事件；输出：无；作用：严格校验后发送一次角度或明确释放，失败后只查询、不重试。
-async function commandArm(event) {
-  if (armBusy || armPolling || !armSnapshot || !armSnapshot.ready) return;
+// 输入：长连接回报；输出：无；作用：验证状态、过滤停止前的迟到回报，并更新机械臂界面。
+function receiveArm(report) {
+  const arrays = ['angles', 'targets', 'minimum', 'maximum', 'holding', 'slewing'];
+  if (!Number.isInteger(report.s) || report.s <= 0 || report.s > socketSeq || report.s < armReportSeq ||
+      !Number.isInteger(report.generation) || report.generation < 0 || report.generation > 0xffffffff ||
+      !Number.isInteger(report.c) || !Number.isInteger(report.fault) || typeof report.enabled !== 'boolean' || typeof report.ready !== 'boolean' ||
+      arrays.some(invalidArmArray, report)) { loseArmLink('机械臂状态格式错误'); return; }
+  for (let joint = 0; joint < 2; joint += 1) {
+    if (!Number.isInteger(report.angles[joint]) || report.angles[joint] < -1 || report.angles[joint] > 180 ||
+        !Number.isInteger(report.targets[joint]) || report.targets[joint] < -1 || report.targets[joint] > 180 ||
+        !Number.isInteger(report.minimum[joint]) || !Number.isInteger(report.maximum[joint]) ||
+        report.minimum[joint] < 0 || report.maximum[joint] > 180 || report.minimum[joint] > report.maximum[joint] ||
+        typeof report.holding[joint] !== 'boolean' || typeof report.slewing[joint] !== 'boolean') {
+      loseArmLink('机械臂角度状态无效'); return;
+    }
+  }
+  armReportSeq = report.s; armAckMs = performance.now(); lastReportMs = armAckMs;
+  if (armPendingSeq && report.s < armPendingSeq) return;
+  const confirmed = Boolean(armPendingSeq);
+  if (confirmed) { armPendingSeq = 0; armBusy = false; }
+  updateArm(report);
+  if (report.c !== 0) {
+    stopArmStep();
+    document.getElementById('armMessage').textContent = '机械臂指令被拒绝（结果 ' + report.c + '，故障 ' + report.fault + '），未自动重发。';
+    return;
+  }
+  if (!report.enabled || !report.ready) {
+    stopArmStep(false);
+    document.getElementById('armMessage').textContent = !report.enabled ? '当前固件关闭机械臂。' : '机械臂不可用，故障 ' + report.fault + '。';
+    return;
+  }
+  if (armStepButton) {
+    const joint = Number(armStepButton.dataset.armJoint);
+    const limit = armStepButton.dataset.armStep === 'increase' ? report.maximum[joint] : report.minimum[joint];
+    if (report.angles[joint] === limit) {
+      stopArmStep();
+      document.getElementById('armMessage').textContent = '已达到软件限位，停止角度推进。';
+    }
+  } else if (confirmed) document.getElementById('armMessage').textContent = '指令已确认；显示为目标和下发角度，没有实际位置反馈。';
+}
+
+// 输入：字段名；输出：数组是否缺失；作用：为状态校验提供具名回调。
+function invalidArmArray(name) { return !Array.isArray(this[name]) || this[name].length !== 2; }
+
+// 输入：错误说明；输出：无；作用：断流不恢复旧操作，设备在短租约到期后停止推进。
+function loseArmLink(message) {
+  stopArmStep(false); armPendingSeq = 0; armBusy = false; armSnapshot = null;
+  armSettings.disabled = true;
+  document.getElementById('armState').textContent = '状态未知';
+  document.getElementById('armMessage').textContent = message + '；未自动恢复动作。';
+}
+
+// 输入：无；输出：无；作用：空闲时只通过现有长连接读取状态，不创建额外 HTTP 会话。
+function pollArm() {
+  if (document.hidden || pageLeaving || !motorSocket || motorSocket.readyState !== WebSocket.OPEN) return;
+  if (armBusy) {
+    if (performance.now() - armPendingAt > 1500) {
+      sendArmFrame(5); loseArmLink('机械臂指令结果超时');
+    }
+    return;
+  }
+  if (armStepButton || performance.now() - armQueryMs < 1000) return;
+  armQueryMs = performance.now(); sendArmFrame(8);
+}
+
+// 输入：目标或释放按钮；输出：无；作用：指令经持续连接提交一次，结果未知时不重放。
+function commandArm(event) {
+  if (armBusy || !armSnapshot || !armSnapshot.ready) return;
   const release = event.currentTarget.id === 'armRelease';
-  const stepAction = event.currentTarget.dataset.armStep;
-  if (!stepAction) stopArmStep();
-  const body = new URLSearchParams({action: release ? 'release' : stepAction || 'set'});
-  let limitText = '';
-  if (!release) {
-    const joint = Number(event.currentTarget.dataset.armJoint);
-    const input = document.getElementById('armAngle' + joint);
-    const angle = Number(input.value);
-    if (!stepAction && (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint])) {
-      document.getElementById('armMessage').textContent = '关节 ' + (joint + 1) + ' 超出软件范围，指令未发送。';
-      return;
-    }
-    body.set('joint', joint);
-    if (stepAction) body.set('step', 15);
-    else body.set('angle', angle);
-    body.set('generation', armSnapshot.generation);
-    if (angle === armSnapshot.minimum[joint]) limitText = '已达到设定下限；';
-    if (angle === armSnapshot.maximum[joint]) limitText = '已达到设定上限；';
+  const joint = release ? 0 : Number(event.currentTarget.dataset.armJoint);
+  const input = document.getElementById('armAngle' + joint);
+  const angle = release ? 0 : Number(input.value);
+  if (!release && (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint])) {
+    document.getElementById('armMessage').textContent = '目标超出软件范围，未发送。'; return;
   }
-  armBusy = true;
-  if (!stepAction) armSettings.disabled = true;
-  try {
-    const state = JSON.parse(await request(armUrl.href, {method: 'POST', body, timeout: 1500}));
-    updateArm(state);
-    if (stepAction) {
-      const joint = Number(event.currentTarget.dataset.armJoint);
-      const atLimit = state.angles[joint] === (stepAction === 'increase' ? state.maximum[joint] : state.minimum[joint]);
-      limitText = atLimit ? '已达到软件限位；' : '';
-      if (atLimit) stopArmStep();
-    }
-    document.getElementById('armMessage').textContent = release ? '两个关节输出已释放，请注意承重机械臂。' : limitText + '目标已写入，不能据此确认实际到位。';
-  } catch (error) {
-    armSnapshot = null;
-    document.getElementById('armMessage').textContent = '指令结果未确认或被拒绝，不自动重发。' + error.message;
-  } finally {
-    armBusy = false;
-    armSettings.disabled = !armSnapshot || !armSnapshot.ready;
+  stopArmStep(false);
+  const sequence = sendArmFrame(release ? 7 : 6, joint, angle);
+  if (!sequence) { loseArmLink('控制连接忙或未就绪'); return; }
+  armPendingSeq = sequence; armPendingAt = performance.now(); armBusy = true; armSettings.disabled = true;
+  document.getElementById('armMessage').textContent = release ? '正在释放输出，请注意承重机械臂。' : '正在提交平滑目标…';
+}
+
+// 输入：是否通知设备；输出：无；作用：松手提交保持命令，旧回报不能恢复按住。
+function stopArmStep(notify = true) {
+  const wasHeld = Boolean(armStepButton);
+  armStepButton = null; armStepPointer = null; clearTimeout(armStepTimer); armStepTimer = 0;
+  if (wasHeld && notify && !pageLeaving) {
+    const sequence = sendArmFrame(5);
+    if (sequence) { armPendingSeq = sequence; armPendingAt = performance.now(); armBusy = true; armSettings.disabled = true; }
+    else if (motorSocket) failMotorLink('机械臂停止请求未能发送');
   }
 }
 
-for (const button of document.querySelectorAll('[data-arm-joint]:not([data-arm-step])')) button.addEventListener('click', commandArm);
-// 每次确认后才发送下一步；松开只撤销后续发送，不释放关节承重力矩。
-let armStepButton = null;
-let armStepTimer = 0;
-let armStepVersion = 0;
-function stopArmStep() {
-  armStepButton = null; ++armStepVersion;
-  clearTimeout(armStepTimer);
-}
-async function repeatArmStep() {
-  const button = armStepButton;
-  const version = armStepVersion;
-  if (!button || document.hidden || pageLeaving) return;
-  if (armBusy || armPolling) { armStepTimer = setTimeout(repeatArmStep, 100); return; }
-  await commandArm({currentTarget:button});
-  if (version !== armStepVersion || !armStepButton) return;
-  if (!armSnapshot || !armSnapshot.ready) { stopArmStep(); return; }
+// 输入：无；输出：无；作用：每 100 ms 更新一次平滑目标，不等待每一步的响应。
+function repeatArmStep() {
+  armStepTimer = 0;
+  if (!armStepButton || document.hidden || pageLeaving) return;
+  if (performance.now() - armAckMs > 500) { stopArmStep(); return; }
+  const joint = Number(armStepButton.dataset.armJoint);
+  const sequence = sendArmFrame(armStepButton.dataset.armStep === 'increase' ? 3 : 4, joint, 15);
+  if (!sequence) { stopArmStep(); return; }
   armStepTimer = setTimeout(repeatArmStep, 100);
 }
+
+// 输入：指针按下；输出：无；作用：从已设置的角度开始，首次未知角度不自动回中。
 function beginArmStep(event) {
-  if (event.button !== 0 || armBusy || !armSnapshot || !armSnapshot.ready) return;
+  if (event.button !== 0 || armBusy || armStepButton || !armSnapshot || !armSnapshot.ready) return;
   event.preventDefault();
   const joint = Number(event.currentTarget.dataset.armJoint);
-  if (armSnapshot.angles[joint] < 0) {
-    document.getElementById('armMessage').textContent = '请先发送该关节的初始目标角度，再进行连续增减。'; return;
+  if (armSnapshot.angles[joint] < 0 || !armSnapshot.holding[joint]) {
+    document.getElementById('armMessage').textContent = '请先发送该关节的初始目标角度。'; return;
   }
-  stopArmStep(); armStepButton = event.currentTarget;
-  armStepButton.setPointerCapture(event.pointerId);
-  repeatArmStep();
+  armStepButton = event.currentTarget; armStepPointer = event.pointerId; armAckMs = performance.now();
+  armStepButton.setPointerCapture(event.pointerId); repeatArmStep();
 }
+
+// 输入：释放事件；输出：无；作用：其他指针或旧捕获回调不能结束新关节操作。
+function endArmStep(event) {
+  if (event && event.type === 'lostpointercapture' && event.currentTarget !== armStepButton) return;
+  if (event && event.pointerId !== undefined && event.pointerId !== armStepPointer) return;
+  stopArmStep();
+}
+function hideArmStep() { if (document.hidden) stopArmStep(); }
+for (const button of document.querySelectorAll('[data-arm-joint]:not([data-arm-step])')) button.addEventListener('click', commandArm);
 for (const button of document.querySelectorAll('[data-arm-step]')) {
   button.addEventListener('pointerdown', beginArmStep);
-  button.addEventListener('lostpointercapture', stopArmStep);
+  button.addEventListener('lostpointercapture', endArmStep);
   button.addEventListener('contextmenu', preventDriveMenu);
 }
-document.addEventListener('pointerup', stopArmStep);
-document.addEventListener('pointercancel', stopArmStep);
-window.addEventListener('blur', stopArmStep);
-window.addEventListener('pagehide', stopArmStep);
-function hideArmStep() { if (document.hidden) stopArmStep(); }
+document.addEventListener('pointerup', endArmStep);
+document.addEventListener('pointercancel', endArmStep);
+window.addEventListener('blur', endArmStep);
+window.addEventListener('pagehide', endArmStep);
 document.addEventListener('visibilitychange', hideArmStep);
 document.getElementById('armRelease').addEventListener('click', commandArm);
-pollArm();
-setInterval(pollArm, 2000);
+setInterval(pollArm, 250);
+
+// 输入：确认后的开关状态；输出：无；作用：按钮只显示设备已确认的软件输出状态。
+function updateLed(state) {
+  const button = document.getElementById('ledToggle');
+  if (!state || !state.led_ready || typeof state.led_on !== 'boolean') {
+    ledKnown = null; button.disabled = true; button.textContent = '补光灯状态未知'; button.setAttribute('aria-pressed', 'false'); return;
+  }
+  ledKnown = state.led_on; button.disabled = ledBusy;
+  button.textContent = ledKnown ? '关闭补光灯' : '打开补光灯';
+  button.setAttribute('aria-pressed', String(ledKnown));
+}
+
+// 输入：点击；输出：无；作用：按绝对开关值设置，不乐观翻转，也不自动重试未知结果。
+async function toggleLed() {
+  if (ledBusy || ledKnown === null) return;
+  ledBusy = true; ++ledVersion;
+  const button = document.getElementById('ledToggle'); button.disabled = true;
+  try {
+    const state = JSON.parse(await request('/led', {method:'POST',body:new URLSearchParams({enabled:ledKnown ? 0 : 1}),timeout:1500}));
+    ledBusy = false; updateLed(state);
+  } catch (error) {
+    ledBusy = false; updateLed(null); showMessage('补光灯指令结果未确认，等待重新读取状态。' + error.message, true);
+  }
+}
+document.getElementById('ledToggle').addEventListener('click', toggleLed);
 
 </script>
 </body>

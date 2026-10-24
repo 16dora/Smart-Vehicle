@@ -42,6 +42,10 @@ private:
 #endif
     // 输入：无；输出：驱动结果；作用：配置 AI-Thinker 引脚与 PSRAM 帧缓冲。
     esp_err_t initCamera();
+    // 输入：无；输出：结果；作用：配置 GPIO4 补光灯，启动默认关闭。
+    esp_err_t initLed();
+    // 输入：开关表单；输出：HTTP 结果；作用：设置补光灯并返回确认后的软件状态。
+    esp_err_t setLed(httpd_req_t* req);
     // 输入：已初始化的 OV2640；输出：设置结果；作用：分辨率变化后恢复低外部时钟的内部倍频。
     esp_err_t applySensorClock(sensor_t* sensor);
     // 输入：无；输出：初始化结果；作用：按构建配置启动路由器 STA 或独立 AP 模式。
@@ -76,6 +80,12 @@ private:
     static bool isMotorOrigin(httpd_req_t* req, bool required);
     // 输入：连接、序号和执行结果；输出：发送结果；作用：一次非阻塞发送紧凑状态，拥塞时合并。
     esp_err_t reportMotor(int socketFd, uint32_t sequence, esp_err_t result);
+    // 输入：输出缓冲、容量、机械臂快照、序号及结果；输出：JSON 长度；作用：统一 HTTP 和长连接状态格式。
+    static int formatArm(char* text, size_t capacity, const ArmState& state, uint32_t sequence, esp_err_t result);
+    // 输入：连接、序号及结果；输出：发送结果；作用：在现有控制连接上发送独立机械臂状态。
+    esp_err_t reportArm(int socketFd, uint32_t sequence, esp_err_t result);
+    // 输入：连接及文本；输出：发送结果；作用：单次发送完整 WS 帧，支持扩展长度。
+    esp_err_t sendSocketText(int socketFd, const char* text, size_t length);
     // 输入：HTTP 请求；输出：传输结果；作用：发送有帧率上限的 MJPEG 视频。
     static esp_err_t onStream(httpd_req_t* req);
     // 输入：请求；输出：发送结果；作用：返回线程安全的参数及帧率快照。
@@ -103,6 +113,12 @@ private:
     // 输入：无；输出：无；作用：统一重连或停止后的帧率清理。
     void finishStream();
 
+    // GPIO4 配置是否成功；补光灯失败不阻止相机和运动服务启动。
+    std::atomic<bool> m_ledReady{false};
+    // 最后成功写入的补光灯开关，不表示物理发光反馈。
+    std::atomic<bool> m_ledOn{false};
+    // 补光灯初始化或写入错误，用于页面明确显示不可用。
+    std::atomic<esp_err_t> m_ledFault{ESP_OK};
     // 保护相机采集、传感器设置及运行统计，网络发送不持有此锁。
     mutable std::mutex m_mutex;
     // 保护相机/运行状态快照和视频累计量；持锁期间不取帧、不访问外设、不发送网络。

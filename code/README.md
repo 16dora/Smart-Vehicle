@@ -5,6 +5,7 @@
 
 - `01SerialLoopBackTest/`：UART0 心跳与逐行回显。
 - `02CameraWebServer/`：AI-Thinker ESP32-CAM 摄像头网页、MJPEG 预览、图像设置及 PCA9685＋TB6612FNG 四轮控制。
+- `03CameraApSta/`：复制 02 功能并同时开启热点与路由器连接，热点密码为 `123456789`。
 
 后续工程沿用编号加功能名称的目录形式，例如 `03GpioTest/`。
 每个工程分别维护 `CMakeLists.txt`、`source/`、`include/`、

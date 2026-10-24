@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include "esp_check.h"
+#include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -24,7 +25,6 @@
 #include "nvs_flash.h"
 #if CONFIG_CAMERA_PERF_TEST
 #include "driver/ledc.h"
-#include "driver/gpio.h"
 #endif
 
 // 本模块日志标签；协议数据使用 HTTP 输出，不与串口日志混合。
@@ -59,6 +59,8 @@ void CameraWeb::updateOled(bool isCpuValid, const std::array<double, 2>& busyPct
 esp_err_t CameraWeb::start()
 {
     ESP_LOGI(TAG, "start() >>");
+    const esp_err_t ledResult = initLed();
+    if (ledResult != ESP_OK) ESP_LOGW(TAG, "Flash LED unavailable result=%s", esp_err_to_name(ledResult));
 #if CONFIG_CAMERA_OLED_ENABLED
     // 控制台已由 ESP-IDF 配置为空设备，初始化 SPI 后 UART0 不再输出业务日志。
     const esp_err_t oledResult = m_display.start();
@@ -91,6 +93,86 @@ esp_err_t CameraWeb::start()
     }
     ESP_LOGI(TAG, "start() << result=%s", esp_err_to_name(result));
     return result;
+}
+
+// 输入：无；输出：初始化结果；作用：GPIO4 使用普通输出，上电关闭白色补光灯。
+esp_err_t CameraWeb::initLed()
+{
+    ESP_LOGI(TAG, "initLed() >> gpio=4 default=off");
+    // 先清输出锁存再开启输出，避免复用 PWM 或在初始化时产生补光脉冲。
+    ESP_LOGI(TAG, "gpio_set_level() >> gpio=4 level=0");
+    esp_err_t result = gpio_set_level(GPIO_NUM_4, 0);
+    ESP_LOGI(TAG, "gpio_set_level() << result=%s", esp_err_to_name(result));
+    if (result == ESP_OK)
+    {
+        gpio_config_t config = {};
+        config.pin_bit_mask = 1ULL << GPIO_NUM_4;
+        config.mode = GPIO_MODE_OUTPUT;
+        config.pull_up_en = GPIO_PULLUP_DISABLE;
+        config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        config.intr_type = GPIO_INTR_DISABLE;
+        ESP_LOGI(TAG, "gpio_config() >> gpio=4 mode=OUTPUT pulls=disabled interrupt=disabled");
+        result = gpio_config(&config);
+        ESP_LOGI(TAG, "gpio_config() << result=%s", esp_err_to_name(result));
+    }
+    m_ledFault.store(result);
+    m_ledReady.store(result == ESP_OK);
+    m_ledOn.store(false);
+    if (result == ESP_OK) ESP_LOGI(TAG, "initLed() << result=ESP_OK");
+    else ESP_LOGW(TAG, "initLed() << result=%s", esp_err_to_name(result));
+    return result;
+}
+
+// 输入：enabled=0 或 enabled=1；输出：确认后的开关状态；作用：幂等设置，失败不自动反向重试。
+esp_err_t CameraWeb::setLed(httpd_req_t* req)
+{
+    ESP_LOGI(TAG, "setLed() >> bytes=%u", unsigned(req->content_len));
+    if (!isMotorOrigin(req, false))
+    {
+        ESP_LOGW(TAG, "setLed() << result=ORIGIN_REJECTED");
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Use the device webpage");
+    }
+    char body[16] = {};
+    size_t offset = 0;
+    esp_err_t result = ESP_OK;
+    if (req->content_len == 0 || req->content_len >= sizeof(body)) result = ESP_ERR_INVALID_ARG;
+    while (result == ESP_OK && offset < req->content_len)
+    {
+        // 收齐表单才允许改变输出；超时或不完整请求保持原开关。
+        ESP_LOGI(TAG, "httpd_req_recv() >> remaining=%u", unsigned(req->content_len - offset));
+        const int count = httpd_req_recv(req, body + offset, req->content_len - offset);
+        ESP_LOGI(TAG, "httpd_req_recv() << count=%d", count);
+        if (count <= 0) result = ESP_ERR_INVALID_ARG;
+        else offset += size_t(count);
+    }
+    if (result == ESP_OK && std::strcmp(body, "enabled=0") != 0 && std::strcmp(body, "enabled=1") != 0)
+        result = ESP_ERR_INVALID_ARG;
+    if (result == ESP_ERR_INVALID_ARG)
+    {
+        ESP_LOGW(TAG, "setLed() << result=INVALID_ARGUMENT");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected enabled=0 or enabled=1");
+    }
+    if (!m_ledReady.load()) result = ESP_ERR_INVALID_STATE;
+    if (result == ESP_OK)
+    {
+        const bool enabled = body[8] == '1';
+        ESP_LOGI(TAG, "gpio_set_level() >> gpio=4 level=%d", int(enabled));
+        result = gpio_set_level(GPIO_NUM_4, int(enabled));
+        ESP_LOGI(TAG, "gpio_set_level() << result=%s", esp_err_to_name(result));
+        m_ledFault.store(result);
+        if (result == ESP_OK) m_ledOn.store(enabled);
+        else m_ledReady.store(false);
+    }
+    if (result != ESP_OK)
+    {
+        ESP_LOGW(TAG, "setLed() << result=%s", esp_err_to_name(result));
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash LED unavailable");
+    }
+    char json[96];
+    std::snprintf(json, sizeof(json), "{\"led_ready\":true,\"led_on\":%s,\"led_fault\":0}", m_ledOn.load() ? "true" : "false");
+    httpd_resp_set_type(req, "application/json");
+    ESP_LOGI(TAG, "setLed() << result=ESP_OK enabled=%d", int(m_ledOn.load()));
+    return httpd_resp_sendstr(req, json);
 }
 
 esp_err_t CameraWeb::initCamera()
@@ -407,9 +489,9 @@ esp_err_t CameraWeb::startServers()
     config.server_port = 80;
     config.stack_size = 8192;
 #if CONFIG_CAMERA_PERF_TEST
-    config.max_uri_handlers = 6;
+    config.max_uri_handlers = 7;
 #else
-    config.max_uri_handlers = 5;
+    config.max_uri_handlers = 6;
 #endif
     config.max_open_sockets = 4;
     config.lru_purge_enable = true;
@@ -418,13 +500,13 @@ esp_err_t CameraWeb::startServers()
     // 三个服务复用连接配置，所有新连接均禁用 TCP 小包合并等待。
     config.open_fn = onSocketOpen;
     ESP_RETURN_ON_ERROR(httpd_start(&m_control, &config), TAG, "control server failed");
-    const char* paths[] = {"/", "/status", "/control", "/stop", "/capture"};
+    const char* paths[] = {"/", "/status", "/control", "/stop", "/capture", "/led"};
     for (const char* path : paths)
     {
         httpd_uri_t uri = {};
         uri.uri = path;
         uri.method = (std::strcmp(path, "/control") == 0 ||
-                      std::strcmp(path, "/stop") == 0) ? HTTP_POST : HTTP_GET;
+                      std::strcmp(path, "/stop") == 0 || std::strcmp(path, "/led") == 0) ? HTTP_POST : HTTP_GET;
         uri.handler = onRequest;
         uri.user_ctx = this;
         const esp_err_t result = httpd_register_uri_handler(m_control, &uri);
@@ -588,6 +670,10 @@ esp_err_t CameraWeb::onRequest(httpd_req_t* req)
         extern const char pageStart[] asm("_binary_index_html_start");
         httpd_resp_set_type(req, "text/html; charset=utf-8");
         return httpd_resp_send(req, pageStart, HTTPD_RESP_USE_STRLEN);
+    }
+    if (std::strcmp(req->uri, "/led") == 0)
+    {
+        return app->setLed(req);
     }
     if (std::strcmp(req->uri, "/status") == 0)
     {
@@ -966,18 +1052,11 @@ esp_err_t CameraWeb::onArm(httpd_req_t* req)
 // 输入：请求；输出：状态 JSON；作用：公布软件限位、代次与最后目标，释放后的角度也不是测量值。
 esp_err_t CameraWeb::sendArm(httpd_req_t* req)
 {
-    const ArmState state = m_arm.getState();
     char json[512];
-    const int count = std::snprintf(json, sizeof(json),
-        "{\"enabled\":%s,\"ready\":%s,\"fault\":%d,\"generation\":%lu,"
-        "\"angles\":[%d,%d],\"holding\":[%s,%s],\"minimum\":[%d,%d],\"maximum\":[%d,%d]}",
-        state.enabled ? "true" : "false", state.ready ? "true" : "false", state.fault,
-        (unsigned long)state.generation, state.angles[0], state.angles[1],
-        state.holding[0] ? "true" : "false", state.holding[1] ? "true" : "false",
-        state.minimum[0], state.minimum[1], state.maximum[0], state.maximum[1]);
-    if (count < 0 || count >= int(sizeof(json))) return ESP_FAIL;
+    const int length = formatArm(json, sizeof(json), m_arm.getState(), 0, ESP_OK);
+    if (length < 0 || length >= int(sizeof(json))) return ESP_FAIL;
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_send(req, json, count);
+    return httpd_resp_send(req, json, length);
 }
 
 // 输入：action=set/release 表单；输出：命令结果；作用：完整校验后执行，越界不裁剪、不写硬件。
@@ -1092,29 +1171,65 @@ esp_err_t CameraWeb::reportMotor(int socketFd, uint32_t sequence, esp_err_t resu
         ESP_LOGE(TAG, "reportMotor() << result=STATE_TOO_LARGE");
         return ESP_FAIL;
     }
-    std::array<uint8_t, 127> packet{};
-    // 服务端帧无需掩码；将头和正文合成一次写入，避免两个微小 TCP 包。
-    packet[0] = 0x81;
-    packet[1] = static_cast<uint8_t>(length);
-    std::memcpy(packet.data() + 2, text, length);
-    ESP_LOGD(TAG, "send() >> socket=%d bytes=%d flags=MSG_DONTWAIT", socketFd, length + 2);
-    const int count = send(socketFd, packet.data(), length + 2, MSG_DONTWAIT);
-    const int sendErr = count < 0 ? errno : 0;
-    ESP_LOGD(TAG, "send() << result=%d errno=%d", count, sendErr);
-    if (count < 0 && (sendErr == EAGAIN || sendErr == EWOULDBLOCK))
-    {
-        // 缓冲拥塞时不排队、不等待 ACK；下一条输入合并为最新状态再次尝试。
-        return ESP_OK;
-    }
-    if (count != length + 2)
-    {
-        // 已写入半帧时不能接着发送另一帧；关闭连接，触发失联停车。
-        ESP_LOGW(TAG, "reportMotor() << result=SEND_FAILED bytes=%d errno=%d", count, sendErr);
-        return ESP_FAIL;
-    }
+    const esp_err_t sent = sendSocketText(socketFd, text, length);
+    if (sent == ESP_ERR_TIMEOUT) return ESP_OK;
+    if (sent != ESP_OK) return sent;
     m_reportUs = esp_timer_get_time();
     m_reportGen = state.generation;
     m_isReportedMoving = state.moving;
+    return ESP_OK;
+}
+
+// 输入：状态及回报编号；输出：JSON 长度；作用：同一快照区分输出角度和待完成目标。
+int CameraWeb::formatArm(char* text, size_t capacity, const ArmState& state, uint32_t sequence, esp_err_t result)
+{
+    return std::snprintf(text, capacity,
+        "{\"type\":\"arm\",\"s\":%lu,\"c\":%d,\"enabled\":%s,\"ready\":%s,\"fault\":%d,\"generation\":%lu,"
+        "\"angles\":[%d,%d],\"targets\":[%d,%d],\"holding\":[%s,%s],\"slewing\":[%s,%s],\"minimum\":[%d,%d],\"maximum\":[%d,%d]}",
+        static_cast<unsigned long>(sequence), result, state.enabled ? "true" : "false", state.ready ? "true" : "false", state.fault,
+        static_cast<unsigned long>(state.generation), state.angles[0], state.angles[1], state.targets[0], state.targets[1],
+        state.holding[0] ? "true" : "false", state.holding[1] ? "true" : "false", state.slewing[0] ? "true" : "false", state.slewing[1] ? "true" : "false",
+        state.minimum[0], state.minimum[1], state.maximum[0], state.maximum[1]);
+}
+
+// 输入：连接、序号及机械臂结果；输出：发送结果；作用：回报与车轮协议隔离，不等待角度执行完成。
+esp_err_t CameraWeb::reportArm(int socketFd, uint32_t sequence, esp_err_t result)
+{
+    char text[512];
+    const int length = formatArm(text, sizeof(text), m_arm.getState(), sequence, result);
+    if (length <= 0 || length >= int(sizeof(text))) return ESP_FAIL;
+    const esp_err_t sent = sendSocketText(socketFd, text, length);
+    // 拥塞时不排队；客户端停止续租后本地租约将自动终止推进。
+    return sent == ESP_ERR_TIMEOUT ? ESP_OK : sent;
+}
+
+// 输入：完整文本；输出：发送结果；作用：单包发送 WS 帧，支持 125 字节以上的机械臂快照。
+esp_err_t CameraWeb::sendSocketText(int socketFd, const char* text, size_t length)
+{
+    if (length > 512) return ESP_ERR_INVALID_SIZE;
+    std::array<uint8_t, 516> packet{};
+    packet[0] = 0x81;
+    const size_t header = length <= 125 ? 2 : 4;
+    if (header == 2) packet[1] = uint8_t(length);
+    else
+    {
+        // 扩展长度使用网络大端；服务端帧不需要客户端掩码。
+        packet[1] = 126;
+        packet[2] = uint8_t(length >> 8);
+        packet[3] = uint8_t(length & 0xff);
+    }
+    std::memcpy(packet.data() + header, text, length);
+    ESP_LOGD(TAG, "send() >> socket=%d bytes=%u flags=MSG_DONTWAIT", socketFd, unsigned(header + length));
+    const int count = send(socketFd, packet.data(), header + length, MSG_DONTWAIT);
+    const int sendErr = count < 0 ? errno : 0;
+    ESP_LOGD(TAG, "send() << result=%d errno=%d", count, sendErr);
+    if (count < 0 && (sendErr == EAGAIN || sendErr == EWOULDBLOCK)) return ESP_ERR_TIMEOUT;
+    if (count != int(header + length))
+    {
+        // 半帧不能续发另一帧；失败交给服务关闭连接并触发失联停止。
+        ESP_LOGW(TAG, "sendSocketText() << result=SEND_FAILED bytes=%d errno=%d", count, sendErr);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 
@@ -1130,7 +1245,12 @@ esp_err_t CameraWeb::onMotorSocket(httpd_req_t* req)
     const esp_err_t received = httpd_ws_recv_frame(req, &frame, data.size());
     ESP_LOGD(TAG, "httpd_ws_recv_frame() << result=%s bytes=%u", esp_err_to_name(received), unsigned(frame.len));
     if (received != ESP_OK || frame.type != HTTPD_WS_TYPE_BINARY || frame.len != data.size() ||
-        socketFd != app->m_motorFd || data[0] > 2 || data[1] > 200 || data[2] > 200 || data[3] > 200)
+        socketFd != app->m_motorFd || data[0] > 8 ||
+        (data[0] <= 2 && (data[1] > 200 || data[2] > 200 || data[3] > 200)) ||
+        (data[0] >= 3 && (data[1] > 1 || data[3] != 0 ||
+          ((data[0] == 3 || data[0] == 4) && (data[2] < 1 || data[2] > 15)) ||
+          (data[0] == 6 && data[2] > 180) ||
+          ((data[0] == 5 || data[0] == 7 || data[0] == 8) && (data[1] != 0 || data[2] != 0)))))
     {
         // 畸形帧或非当前控制连接都不能执行运动；返回失败由关闭回调投递停车。
         ESP_LOGW(TAG, "onMotorSocket() << result=INVALID_FRAME socket=%d", socketFd);
@@ -1151,6 +1271,19 @@ esp_err_t CameraWeb::onMotorSocket(httpd_req_t* req)
     }
     app->m_motorSeq = sequence;
     esp_err_t result = ESP_OK;
+    if (data[0] >= 3)
+    {
+        // 机械臂与车轮共用传输连接，但状态代次和业务结果分开处理。
+        if (data[0] == 5) result = app->m_arm.hold();
+        else if (data[0] == 7) result = app->m_arm.release();
+        else if (data[0] != 8)
+        {
+            if (!app->m_connected.load()) result = ESP_ERR_INVALID_STATE;
+            else result = app->m_arm.setTarget(data[1], data[0] == 4 ? -int(data[2]) : int(data[2]), generation, data[0] != 6);
+        }
+        // 机械臂拒绝命令只回报机械臂错误，不因此切断仍正常的车轮连接。
+        return app->reportArm(socketFd, sequence, result);
+    }
     if (data[0] == 2)
     {
         // 停车不要求代次，始终优先撤销当前输出；回报用于确认下一次按住的代次。
@@ -1578,12 +1711,13 @@ esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Camera not ready");
     }
     std::snprintf(json, sizeof(json),
-        "%s,\"connected\":%s,\"runtime\":%s,\"runtime_age_ms\":%lld,\"video_active\":%s,"
+        "%s,\"connected\":%s,\"runtime\":%s,\"runtime_age_ms\":%lld,\"video_active\":%s,\"led_ready\":%s,\"led_on\":%s,\"led_fault\":%d,"
         "\"motor\":{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,"
         "\"generation\":%lu,\"forward\":%d,\"right\":%d,\"turn\":%d,\"wheels\":[%d,%d,%d,%d]}}",
         cached.data(), m_connected.load() ? "true" : "false",
         runtime[0] == '\0' ? "{}" : runtime.data(), static_cast<long long>(runtimeAgeMs),
         isVideoActive ? "true" : "false",
+        m_ledReady.load() ? "true" : "false", m_ledOn.load() ? "true" : "false", int(m_ledFault.load()),
         motor.enabled ? "true" : "false", motor.ready ? "true" : "false", motor.moving ? "true" : "false",
         motor.fault, static_cast<unsigned long>(motor.generation), motor.forward, motor.right, motor.turn,
         motor.wheels[0], motor.wheels[1], motor.wheels[2], motor.wheels[3]);
