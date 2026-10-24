@@ -6,12 +6,13 @@
   <title>Smart Vehicle · 相机与车辆控制</title>
   <style>
     :root{color-scheme:dark;font-family:system-ui,"Microsoft YaHei",sans-serif;background:#0c1421;color:#e5edf7}
-    *{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:28px 20px}
+    *{box-sizing:border-box}body{margin:0}main{max-width:1500px;margin:auto;padding:28px 20px}
     header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}
     h1{font-size:25px;margin:8px 0}h2{font-size:17px;margin:0 0 20px}.eyebrow{font-size:12px;letter-spacing:2px;color:#80c5ff}
     .muted{color:#9caec5;font-size:13px;line-height:1.7}.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px}
-    .card{background:#142034;border:1px solid #293a53;border-radius:16px;padding:20px}.preview{background:#060c15;min-height:330px;display:grid;place-items:center;border-radius:10px;overflow:hidden}
-    .preview img{width:100%;height:auto;display:block}.placeholder{color:#8193ac;text-align:center;padding:30px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .layout>*{min-width:0}
+    .card{background:#142034;border:1px solid #293a53;border-radius:16px;padding:20px}.preview{position:relative;width:100%;max-width:calc(42vh * 4 / 3);margin-inline:auto;background:#060c15;min-height:0;aspect-ratio:4/3;display:grid;place-items:center;border-radius:10px;overflow:hidden}
+    .preview img{width:100%;height:auto;display:block}.preview:has(img:not([hidden])){aspect-ratio:auto}.placeholder{color:#8193ac;text-align:center;padding:30px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
     button,.button{font:inherit;font-size:14px;padding:10px 16px;border:1px solid #425672;border-radius:8px;background:#21334e;color:#e5edf7;cursor:pointer;text-decoration:none}
     button.primary{background:#66b8f6;color:#071422;border:0;font-weight:600}button:disabled{opacity:.45;cursor:wait}
     .metrics{display:flex;gap:28px;flex-wrap:wrap;margin-top:24px}.number{font-size:23px;font-variant-numeric:tabular-nums}.unit{font-size:12px;color:#9caec5}
@@ -19,7 +20,13 @@
     input[type=range]{width:100%;accent-color:#66b8f6}output{float:right;color:#8fcbff;font-variant-numeric:tabular-nums}.check{display:flex;align-items:center;gap:10px;margin-bottom:16px}.check input{accent-color:#66b8f6;width:17px;height:17px}
     #message{min-height:24px;font-size:13px;color:#8fcbff;margin-top:14px}#message.error{color:#ffb4ab}.badge{font-size:12px;border:1px solid #425672;padding:7px 12px;border-radius:30px;color:#b6d9f8}
     fieldset{padding:0;border:0;margin:0;min-width:0}[hidden]{display:none!important}
-    .drive{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.drive h2{margin-bottom:8px}
+    .video-overlay{position:absolute;top:8px;left:10px;right:10px;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:3px 12px;color:#55ff75;font-size:11px;line-height:1.5;font-weight:500;font-variant-numeric:tabular-nums;text-shadow:0 1px 2px #000,1px 0 2px #000;pointer-events:none}
+    .video-overlay>span{white-space:nowrap}
+    .control-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px;align-items:start}
+    .drive{min-width:0;margin:0;padding:14px;border:1px solid #293a53;border-radius:10px}
+    .control-panels button{padding:9px 10px;font-size:13px}
+    .control-panels .muted{font-size:12px;line-height:1.6}
+    .arm-joint .toolbar button:first-child{flex-basis:100%}.drive h2{margin-bottom:8px}
     .runtime{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.runtime h2{margin-bottom:14px}
     .runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px}.runtime .number{font-size:20px}
     .drive-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:400px;margin:16px auto 8px}
@@ -29,7 +36,9 @@
     [data-drive].held{background:#66b8f6;color:#071422}.drive-stop{background:#7b353c;border-color:#c16a72}
     .arm-joint{margin:16px 0;padding:14px;border:1px solid #425672;border-radius:10px}.arm-joint .toolbar{margin-top:10px}#armMessage{line-height:1.8;color:#b6d9f8}
     #motorMessage{min-height:24px;color:#b6d9f8;font-size:13px;line-height:1.7}
-    @media(max-width:780px){.layout{grid-template-columns:1fr}header{align-items:flex-start}.preview{min-height:220px}main{padding:20px 14px}}
+    @media(max-width:1050px){.layout{grid-template-columns:minmax(0,1fr)}}
+    @media(max-width:640px){.control-panels{grid-template-columns:minmax(0,1fr)}.video-overlay{font-size:10px;gap:2px 8px;top:6px;left:7px;right:7px}}
+    @media(max-width:780px){.layout{grid-template-columns:minmax(0,1fr)}header{align-items:flex-start;flex-wrap:wrap}.preview{min-height:0}main{padding:20px 14px}}
   </style>
 </head>
 <body>
@@ -43,37 +52,25 @@
       <div class="preview">
         <div class="placeholder" id="placeholder">相机已准备<br><span class="muted">点击“开始预览”查看画面</span></div>
         <img id="video" alt="摄像头实时画面" hidden>
+        <div class="video-overlay" aria-label="实时视频状态">
+          <span>发送 <span id="actualFps">--</span> FPS</span>
+          <span title="当前积分时间为估算值">积分 <span id="exposureTime">--</span> ms</span>
+          <span title="CPU 忙碌率为估算值">CPU0 <span id="cpu0Busy">--</span>%</span>
+          <span title="CPU 忙碌率为估算值">CPU1 <span id="cpu1Busy">--</span>%</span>
+          <span><span id="rssiLabel">Wi-Fi</span> <span id="wifiRssi">--</span> dBm</span>
+          <span>车辆 <span id="motorState">等待状态</span></span>
+          <span>机械臂 <span id="armState">等待状态</span></span>
+        </div>
       </div>
       <div class="toolbar">
         <button class="primary" id="start" disabled>开始预览</button>
         <button id="stop" disabled>停止预览</button>
         <a class="button" href="/capture" target="_blank" rel="noopener">查看单张照片</a>
       </div>
-      <div class="metrics">
-        <div><div class="muted">实际发送帧率</div><span class="number" id="actualFps">0.0</span> <span class="unit">FPS</span></div>
-        <div><div class="muted">发送上限</div><span class="number" id="limitFps">10</span> <span class="unit">FPS</span></div>
-        <div><div class="muted">当前积分时间（估算）</div><span class="number" id="exposureTime">--</span> <span class="unit">ms</span></div>
-      </div>
-      <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
-      <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
-      <section class="runtime" aria-label="设备运行状态">
-        <h2>设备运行状态</h2>
-        <div class="runtime-grid">
-          <div><div class="muted">CPU0 忙碌率（估算）</div><span class="number" id="cpu0Busy">--</span> <span class="unit">%</span></div>
-          <div><div class="muted">CPU1 忙碌率（估算）</div><span class="number" id="cpu1Busy">--</span> <span class="unit">%</span></div>
-          <div><div class="muted">CPU 当前频率</div><span class="number" id="cpuMhz">--</span> <span class="unit">MHz</span></div>
-          <div><div class="muted">内部可用堆</div><span class="number" id="internalFree">--</span> <span class="unit">KiB</span></div>
-          <div><div class="muted">PSRAM 可用堆</div><span class="number" id="psramFree">--</span> <span class="unit">KiB</span></div>
-          <div><div class="muted" id="rssiLabel">Wi-Fi 信号</div><span class="number" id="wifiRssi">--</span> <span class="unit">dBm</span></div>
-          <div><div class="muted">视频有效载荷发送速率</div><span class="number" id="videoRate">--</span> <span class="unit">KB/s</span><div class="muted"><span id="videoMbps">--</span> Mbps</div></div>
-          <div><div class="muted">已完成帧平均取帧等待</div><span class="number" id="captureMs">--</span> <span class="unit">ms</span></div>
-          <div><div class="muted">已完成帧平均发送耗时</div><span class="number" id="sendMs">--</span> <span class="unit">ms</span></div>
-        </div>
-        <p class="muted" id="runtimeHint" role="status">等待统计采样，首轮 CPU 只建立基线。</p>
-        <p class="muted">常规约每 2 秒采样。速率统计完整提交的 JPEG，不含协议开销和重传；不代表浏览器已接收或显示。取帧等待不等于传感器积分时间。</p>
-      </section>
+      <div class="control-panels">
       <div class="drive">
-        <h2>车辆控制 <span class="badge" id="motorState">等待设备状态</span></h2>
+        <h2>车辆控制</h2>
+        <p class="muted">键盘：W/S 前后，A/D 左右平移，Q/E 左上/右上，Z/C 左下/右下，R/F 原地左右转；空格停车。按住行驶，松开停车。</p>
         <p class="muted">按住方向键行驶，松手停车。首次使用请架空车轮核对方向；速度表示 PWM 占空比，不是实测轮速。</p>
         <fieldset id="motorSettings" disabled>
           <label for="motorSpeed">速度（最大轮占空比） <output id="motorSpeedValue">30%</output></label>
@@ -98,8 +95,7 @@
         <p class="muted">指令中断约 0.5 秒自动停车。当前按 X 型麦轮布局混控，仅使用一个控制页面操作。</p>
       </div>
       <section class="drive" aria-label="可选机械臂控制">
-        <p class="muted">键盘：W/S 前后，A/D 左右平移，Q/E 左上/右上，Z/C 左下/右下，R/F 原地左右转；空格停车。按住行驶，松开停车。</p>
-        <h2>机械臂 <span class="badge" id="armState">等待状态</span></h2>
+        <h2>机械臂控制</h2>
         <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。先发送初始角度，再按住增减按钮，每次推进 15°，松开保持；到软件限位停止增减。</p>
         <fieldset id="armSettings" disabled>
           <div class="arm-joint">
@@ -118,6 +114,25 @@
         </fieldset>
         <p id="armMessage" role="status" aria-live="polite">正在检查可选机械臂…</p>
         <p class="muted">软件限位不能检测机械碰撞或堵转。断网后保持已设目标；释放输出并不保证能保持当前位置。</p>
+      </section>
+      </div>
+      <div class="metrics">
+        <div><div class="muted">发送上限</div><span class="number" id="limitFps">10</span> <span class="unit">FPS</span></div>
+      </div>
+      <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
+      <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
+      <section class="runtime" aria-label="设备运行状态">
+        <h2>设备运行状态</h2>
+        <div class="runtime-grid">
+          <div><div class="muted">CPU 当前频率</div><span class="number" id="cpuMhz">--</span> <span class="unit">MHz</span></div>
+          <div><div class="muted">内部可用堆</div><span class="number" id="internalFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted">PSRAM 可用堆</div><span class="number" id="psramFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted">视频有效载荷发送速率</div><span class="number" id="videoRate">--</span> <span class="unit">KB/s</span><div class="muted"><span id="videoMbps">--</span> Mbps</div></div>
+          <div><div class="muted">已完成帧平均取帧等待</div><span class="number" id="captureMs">--</span> <span class="unit">ms</span></div>
+          <div><div class="muted">已完成帧平均发送耗时</div><span class="number" id="sendMs">--</span> <span class="unit">ms</span></div>
+        </div>
+        <p class="muted" id="runtimeHint" role="status">等待统计采样，首轮 CPU 只建立基线。</p>
+        <p class="muted">常规约每 2 秒采样。速率统计完整提交的 JPEG，不含协议开销和重传；不代表浏览器已接收或显示。取帧等待不等于传感器积分时间。</p>
       </section>
     </section>
     <aside class="card">
@@ -280,7 +295,7 @@ function updateRuntime(state) {
   document.getElementById('cpuMhz').textContent = runtime.cpu_mhz.toFixed(0);
   document.getElementById('internalFree').textContent = (runtime.internal_free / 1024).toFixed(1);
   document.getElementById('psramFree').textContent = (runtime.psram_free / 1024).toFixed(1);
-  document.getElementById('rssiLabel').textContent = runtime.wifi_mode === 'ap' ? 'AP 最弱客户端信号' : '路由器信号';
+  document.getElementById('rssiLabel').textContent = runtime.wifi_mode === 'ap' ? 'Wi-Fi AP' : 'Wi-Fi';
   document.getElementById('wifiRssi').textContent = runtime.rssi_valid ? String(runtime.rssi_dbm) : '--';
   const hasWindow = runtime.window_ms > 0;
   document.getElementById('videoRate').textContent = hasWindow ? (runtime.video_Bps / 1000).toFixed(1) : '--';
