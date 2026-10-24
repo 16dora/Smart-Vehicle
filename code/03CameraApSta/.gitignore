@@ -1,0 +1,10 @@
+build/
+build-ap/
+managed_components/
+sdkconfig
+sdkconfig.old
+sdkconfig.ap
+sdkconfig.ap.old
+build.log
+build-ap.log
+include/wifi_credentials.local.h
