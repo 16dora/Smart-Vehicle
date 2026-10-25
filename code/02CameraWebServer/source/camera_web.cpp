@@ -1310,7 +1310,9 @@ esp_err_t CameraWeb::onMotorSocket(httpd_req_t* req)
     {
         // 查询、停车、故障立即回报；相同运动心跳不逐条发送响应。
         const esp_err_t sent = app->reportMotor(socketFd, sequence, result);
-        return result == ESP_OK ? sent : ESP_FAIL;
+        // 业务拒绝已由状态回报，停止动作与传输连接故障分别处理。
+        // 保持连接以便重新查询、停车或控制机械臂；只有回报发送失败才关闭。
+        return sent;
     }
     return ESP_OK;
 }

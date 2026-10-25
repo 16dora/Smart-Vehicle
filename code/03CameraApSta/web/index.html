@@ -101,13 +101,13 @@
         <fieldset id="armSettings" disabled>
           <div class="arm-joint">
             <label for="armAngle0">关节 1 / CH14 · <span id="armTarget0">未给定目标</span></label>
-            <input id="armAngle0" type="number" min="30" max="150" step="1" value="90">
+            <input id="armAngle0" type="number" min="5" max="175" step="1" value="90">
             <p class="muted" id="armLimits0">等待软件限位</p>
             <div class="toolbar"><button type="button" data-arm-joint="0">发送关节 1 目标</button><button type="button" data-arm-step="decrease" data-arm-joint="0">按住减小</button><button type="button" data-arm-step="increase" data-arm-joint="0">按住增加</button></div>
           </div>
           <div class="arm-joint">
             <label for="armAngle1">关节 2 / CH15 · <span id="armTarget1">未给定目标</span></label>
-            <input id="armAngle1" type="number" min="30" max="150" step="1" value="90">
+            <input id="armAngle1" type="number" min="5" max="175" step="1" value="90">
             <p class="muted" id="armLimits1">等待软件限位</p>
             <div class="toolbar"><button type="button" data-arm-joint="1">发送关节 2 目标</button><button type="button" data-arm-step="decrease" data-arm-joint="1">按住减小</button><button type="button" data-arm-step="increase" data-arm-joint="1">按住增加</button></div>
           </div>
@@ -225,8 +225,16 @@ let lastReportMs = 0;
 let socketOpenedMs = 0;
 let lastQueryMs = 0;
 let reconnectAtMs = 0;
-// 浏览器尚有数据未发送的起点；积压持续 200 ms 就撤销本地操作，不排队旧目标。
-let sendBlockedMs = 0;
+// 待发送区固定为每类一个槽，短暂发送繁忙只替换最新值，不累计历史目标。
+let queuedDrive = null;
+let queuedArm = null;
+let queuedWheelStop = null;
+let queuedArmAction = null;
+let queuedDriveQuery = null;
+let queuedArmQuery = null;
+let controlSendTimer = 0;
+// -1 表示没有持续积压；200 ms 持续积压才按传输故障关闭连接。
+let sendBlockedMs = -1;
 // 页面退出后不再自动重建控制连接。
 let pageLeaving = false;
 
@@ -242,6 +250,8 @@ let armQueryMs = 0;
 let armStepButton = null;
 let armStepPointer = null;
 let armStepTimer = 0;
+// 每次结束按住递增，过滤已结束手势留下的待发目标。
+let armStepEpoch = 0;
 // 补光灯设置使用独立版本，轮询旧回报不能覆盖刚确认的开关。
 let ledKnown = null;
 let ledBusy = false;
@@ -544,11 +554,12 @@ function clearDrive() {
   if (driveButton) driveButton.classList.remove('held');
   driveButton = null;
   drivePointer = null;
-  sendBlockedMs = 0;
+  queuedDrive = null; queuedWheelStop = null;
 }
 
 // 输入：说明；输出：无；作用：停止续期并关闭连接，已有运动时仅尝试一次 HTTP 备用停车。
 function failMotorLink(message) {
+  clearControlQueue();
   loseArmLink(message);
   const hadDrive = Boolean(driveButton || driveArmed || waitMode);
   clearDrive();
@@ -563,42 +574,79 @@ function failMotorLink(message) {
   if (hadDrive) sendDriveStop(driveVersion);
 }
 
-// 输入：操作编号和三轴；输出：已发送序号或 0；作用：发送固定 12 字节，积压时不追加旧目标。
-function sendMotorFrame(kind, forward = 0, right = 0, turn = 0) {
+// 输入：待发帧；输出：序号，-1 表示已合并等待发送，0 表示连接不可用。
+function submitControl(frame) {
   if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN) return 0;
+  frame.sequence = -1;
+  if (frame.kind === 2) { queuedDrive = null; queuedWheelStop = frame; }
+  else if (frame.kind === 5 || frame.kind === 6 || frame.kind === 7) { queuedArm = null; queuedArmAction = frame; }
+  else if (frame.kind === 1) queuedDrive = frame;
+  else if (frame.kind === 3 || frame.kind === 4) queuedArm = frame;
+  else if (frame.kind === 0) queuedDriveQuery = frame;
+  else queuedArmQuery = frame;
+  flushControlQueue();
+  return motorSocket ? frame.sequence : 0;
+}
+
+// 输入：无；输出：无；作用：取消本地待发内容，断线与离开页面后不重放旧操作。
+function clearControlQueue() {
+  clearTimeout(controlSendTimer); controlSendTimer = 0;
+  queuedDrive = queuedArm = queuedWheelStop = queuedArmAction = queuedDriveQuery = queuedArmQuery = null;
+  sendBlockedMs = -1;
+}
+
+// 输入：无；输出：无；作用：短暂繁忙每 20 ms 重试，停止优先，其余只保留最新目标。
+function flushControlQueue() {
+  clearTimeout(controlSendTimer); controlSendTimer = 0;
+  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN || pageLeaving) { clearControlQueue(); return; }
+  // 松手、失效代次及新手势都不能让旧目标延迟发出。
+  if (queuedDrive && (!driveButton || !driveArmed || queuedDrive.version !== driveVersion || queuedDrive.generation !== motorGeneration)) queuedDrive = null;
+  if (queuedArm && (!armStepButton || !armSnapshot || queuedArm.version !== armStepEpoch || queuedArm.generation !== armSnapshot.generation)) queuedArm = null;
+  const frame = queuedWheelStop ||
+    (queuedArmAction && queuedArmAction.kind !== 6 ? queuedArmAction : null) ||
+    queuedArmAction || queuedDrive || queuedArm || queuedDriveQuery || queuedArmQuery;
+  if (!frame) { sendBlockedMs = -1; return; }
   if (motorSocket.bufferedAmount > 0) {
-    if (!sendBlockedMs) sendBlockedMs = performance.now();
-    // 停车不排在旧目标后等待；关闭连接并走备用停车。普通重复心跳只保留当前目标。
-    if (kind === 2 || performance.now() - sendBlockedMs >= 200) {
-      failMotorLink('发送积压，已停止续期');
-    }
-    return 0;
+    if (sendBlockedMs < 0) sendBlockedMs = performance.now();
+    if (performance.now() - sendBlockedMs >= 200) { failMotorLink('发送持续积压，已停止续期'); return; }
+    controlSendTimer = setTimeout(flushControlQueue, 20);
+    return;
   }
-  sendBlockedMs = 0;
-  if (socketSeq >= 0xfffffffe) {
-    failMotorLink('指令序号需要重新建立连接');
-    return 0;
-  }
+  sendBlockedMs = -1;
+  if (socketSeq >= 0xfffffffe) { failMotorLink('指令序号需要重新建立连接'); return; }
+  if (frame === queuedWheelStop) queuedWheelStop = null;
+  else if (frame === queuedArmAction) queuedArmAction = null;
+  else if (frame === queuedDrive) queuedDrive = null;
+  else if (frame === queuedArm) queuedArm = null;
+  else if (frame === queuedDriveQuery) queuedDriveQuery = null;
+  else queuedArmQuery = null;
   const data = new ArrayBuffer(12);
   const view = new DataView(data);
-  view.setUint8(0, kind);
-  view.setUint8(1, forward + 100);
-  view.setUint8(2, right + 100);
-  view.setUint8(3, turn + 100);
-  view.setUint32(4, motorGeneration, false);
-  view.setUint32(8, ++socketSeq, false);
-  try {
-    motorSocket.send(data);
-    return socketSeq;
-  } catch (error) {
-    failMotorLink('运动数据发送失败：' + error.message);
-    return 0;
+  view.setUint8(0, frame.kind); view.setUint8(1, frame.a); view.setUint8(2, frame.b); view.setUint8(3, frame.c);
+  view.setUint32(4, frame.generation, false);
+  const sequence = ++socketSeq;
+  view.setUint32(8, sequence, false);
+  try { motorSocket.send(data); }
+  catch (error) { failMotorLink('运动数据发送失败：' + error.message); return; }
+  frame.sequence = sequence;
+  // 等到实际发送才绑定确认序号；繁忙期间的旧回报不能完成新的停止握手。
+  if (frame.kind === 2 && waitSequence === -1) waitSequence = sequence;
+  if ((frame.kind === 5 || frame.kind === 6 || frame.kind === 7) && armPendingSeq === -1) {
+    armPendingSeq = sequence; armPendingAt = performance.now();
   }
+  if (queuedWheelStop || queuedArmAction || queuedDrive || queuedArm || queuedDriveQuery || queuedArmQuery)
+    controlSendTimer = setTimeout(flushControlQueue, 20);
+}
+
+// 输入：车轮动作及三轴；输出：已发送序号或等待标记；作用：查询、目标及停车分槽合并。
+function sendMotorFrame(kind, forward = 0, right = 0, turn = 0) {
+  return submitControl({kind, a:forward + 100, b:right + 100, c:turn + 100, generation:motorGeneration, version:driveVersion});
 }
 
 // 输入：连接事件；输出：无；作用：连接建立后先读取状态，不发送非零运动目标。
 function motorOpened(event) {
   if (event.currentTarget !== motorSocket) return;
+  clearControlQueue();
   armReportSeq = 0;
   socketOpenedMs = performance.now();
   lastReportMs = socketOpenedMs;
@@ -628,17 +676,22 @@ function motorReported(event) {
   lastReportMs = performance.now();
   const state = {enabled: Boolean(report.e), ready: Boolean(report.r), moving: Boolean(report.m),
     fault: report.f, generation: report.g};
+  if (waitSequence === -1 || (waitSequence && report.s < waitSequence)) return;
   if (report.c !== 0 || (driveArmed && (!state.ready || state.generation !== motorGeneration))) {
-    failMotorLink('设备已撤销运动指令（结果 ' + report.c + '，故障 ' + report.f + '）');
+    // 业务超时、旧代次或驱动故障停止当前手势，不把仍有效的共享连接当成断网。
+    clearDrive();
+    motorGeneration = state.generation;
+    driveError = '运动已停止（结果 ' + report.c + '，故障 ' + report.f + '），请重新按下操作。';
+    updateMotorState(state);
     return;
   }
-  if (waitSequence && report.s < waitSequence) return;
   if (waitSequence) {
     const mode = waitMode;
     waitSequence = 0;
     waitMode = '';
     if (state.moving) {
-      failMotorLink('停车尚未确认');
+      clearDrive(); driveError = '停车尚未确认，已停止发送运动目标。';
+      updateMotorState(state); sendDriveStop(driveVersion);
       return;
     }
     motorGeneration = state.generation;
@@ -698,7 +751,7 @@ function pollMotor() {
   if (nowMs - lastReportMs > 1500) {
     document.getElementById('motorState').textContent = '状态回报延迟';
   }
-  if (!driveArmed && nowMs - lastQueryMs >= 1000) {
+  if (!driveArmed && !waitMode && nowMs - lastQueryMs >= 1000) {
     lastQueryMs = nowMs;
     sendMotorFrame(0);
   }
@@ -784,9 +837,11 @@ function pauseDrive() {
 
 // 输入：无；输出：无；作用：页面离开时尽力提交停车，不能依赖卸载期间的普通 XHR。
 function leaveDrive() {
-  pageLeaving = true;
+  clearControlQueue();
   const hadDrive = Boolean(driveButton || driveArmed || waitMode);
   if (motorSocket && motorSocket.readyState === WebSocket.OPEN && motorSocket.bufferedAmount === 0) sendMotorFrame(2);
+  pageLeaving = true;
+  clearControlQueue();
   clearDrive();
   const old = motorSocket;
   motorSocket = null;
@@ -899,17 +954,9 @@ function updateArm(state) {
   }
 }
 
-// 输入：动作、关节和数值；输出：发送序号；作用：共用控制连接，机械臂使用独立代次。
+// 输入：动作、关节和数值；输出：序号或等待标记；作用：短暂繁忙时保留最新目标，保持／释放优先。
 function sendArmFrame(kind, joint = 0, value = 0) {
-  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN || motorSocket.bufferedAmount > 0 || socketSeq >= 0xfffffffe) return 0;
-  const data = new ArrayBuffer(12);
-  const view = new DataView(data);
-  view.setUint8(0, kind); view.setUint8(1, joint); view.setUint8(2, value); view.setUint8(3, 0);
-  view.setUint32(4, armSnapshot ? armSnapshot.generation : 0, false);
-  const sequence = ++socketSeq;
-  view.setUint32(8, sequence, false);
-  try { motorSocket.send(data); return sequence; }
-  catch (error) { return 0; }
+  return submitControl({kind, a:joint, b:value, c:0, generation:armSnapshot ? armSnapshot.generation : 0, version:armStepEpoch});
 }
 
 // 输入：长连接回报；输出：无；作用：验证状态、过滤停止前的迟到回报，并更新机械臂界面。
@@ -929,9 +976,16 @@ function receiveArm(report) {
     }
   }
   armReportSeq = report.s; armAckMs = performance.now(); lastReportMs = armAckMs;
-  if (armPendingSeq && report.s < armPendingSeq) return;
+  if (armPendingSeq === -1 || (armPendingSeq && report.s < armPendingSeq)) return;
   const confirmed = Boolean(armPendingSeq);
   if (confirmed) { armPendingSeq = 0; armBusy = false; }
+  if (armStepButton && armSnapshot && report.generation !== armSnapshot.generation) {
+    // 服务端租约到期后必须重新按下，不能用新代次自动恢复旧手势。
+    stopArmStep(false);
+    updateArm(report);
+    document.getElementById('armMessage').textContent = '机械臂已停止推进，请重新按下操作。';
+    return;
+  }
   updateArm(report);
   if (report.c !== 0) {
     stopArmStep();
@@ -958,7 +1012,9 @@ function invalidArmArray(name) { return !Array.isArray(this[name]) || this[name]
 
 // 输入：错误说明；输出：无；作用：断流不恢复旧操作，设备在短租约到期后停止推进。
 function loseArmLink(message) {
-  stopArmStep(false); armPendingSeq = 0; armBusy = false; armSnapshot = null;
+  stopArmStep(false);
+  if (queuedArmAction && queuedArmAction.kind === 6) queuedArmAction = null;
+  armPendingSeq = 0; armBusy = false; armSnapshot = null;
   armSettings.disabled = true;
   document.getElementById('armState').textContent = '状态未知';
   document.getElementById('armMessage').textContent = message + '；未自动恢复动作。';
@@ -998,6 +1054,7 @@ function commandArm(event) {
 function stopArmStep(notify = true) {
   const wasHeld = Boolean(armStepButton);
   armStepButton = null; armStepPointer = null; clearTimeout(armStepTimer); armStepTimer = 0;
+  ++armStepEpoch; queuedArm = null;
   if (wasHeld && notify && !pageLeaving) {
     const sequence = sendArmFrame(5);
     if (sequence) { armPendingSeq = sequence; armPendingAt = performance.now(); armBusy = true; armSettings.disabled = true; }
