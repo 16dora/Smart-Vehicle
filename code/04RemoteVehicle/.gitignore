@@ -1,0 +1,12 @@
+**/build/
+**/sdkconfig
+**/sdkconfig.old
+**/managed_components/
+**/.vs/
+**/CMakeUserPresets.json
+**/wifi_credentials.local.h
+**/cloud_credentials.local.h
+**/*.db
+**/*.db-*
+**/*.tar.gz
+.local/

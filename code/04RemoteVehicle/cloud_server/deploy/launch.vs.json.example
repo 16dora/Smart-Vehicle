@@ -1,0 +1,15 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "cppgdb",
+      "name": "smart_vehicle_cloud (Ubuntu SSH)",
+      "project": "CMakeLists.txt",
+      "projectTarget": "smart_vehicle_cloud",
+      "debuggerConfiguration": "gdb",
+      "args": ["--env-file", "/home/ubuntu/smart-vehicle-cloud/debug/debug.env"],
+      "cwd": "/home/ubuntu/smart-vehicle-cloud/src"
+    }
+  ]
+}

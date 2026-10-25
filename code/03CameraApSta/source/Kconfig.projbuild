@@ -1,0 +1,132 @@
+menu "Camera Web Server"
+
+    config CAMERA_OLED_ENABLED
+        bool "Enable optional 100ask SSD1306 SPI OLED"
+        depends on ESP_CONSOLE_NONE
+        default y
+        help
+            U0R/GPIO3 = SCLK, U0T/GPIO1 = MOSI, GPIO15 = D/C.
+            CS is grounded, MISO is unused. Connect both 3.3V and 5V.
+            UART console must be disabled because SPI reuses UART0 pins.
+            Disconnect the two UART signal wires before serial flashing.
+
+    config CAMERA_RUNTIME_STATS
+        bool
+        default y
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        help
+            Collect idle-task run time for the web status page without enabling
+            the temporary /perf endpoints. Use ESP TIMER as the statistics clock.
+
+    config CAMERA_XCLK_FREQ_HZ
+        int "Camera external clock frequency (Hz)"
+        range 8000000 20000000
+        default 8000000
+        help
+            External clock on GPIO0. Compare throughput on the actual board;
+            some ESP32-CAM boards suffer severe Wi-Fi slowdown with 20 MHz.
+
+    config CAMERA_PERF_TEST
+        bool "Enable temporary performance measurements"
+        default n
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        help
+            Log task CPU time and enable /perf for controlled transfer comparisons.
+            This endpoint can stop and restart the camera. Disable after testing.
+
+    config CAMERA_FRAME_BUFFERS
+        int "Camera frame buffer count"
+        range 1 2
+        default 2
+        help
+            Two buffers allow capture to overlap with JPEG transmission.
+
+    config CAMERA_SENSOR_CLK2X
+        bool "Double OV2640 internal clock at 8 MHz XCLK"
+        depends on CAMERA_XCLK_FREQ_HZ = 8000000
+        default y
+        help
+            Keep GPIO0 at 8 MHz and use the OV2640 internal clock doubler.
+
+    config CAMERA_DVP_DIV
+        int "OV2640 pixel clock divider up to SVGA"
+        range 2 12
+        default 4
+        help
+            Manual DVP pixel clock divider. Larger resolutions retain at least 12.
+
+    config CAMERA_WIFI_APSTA
+        bool
+        default y
+        help
+            This project always runs a local hotspot and router station together.
+
+    config CAMERA_AP_SSID
+        string "Camera hotspot name"
+        depends on CAMERA_WIFI_APSTA
+        default "SmartVehicle-CAM"
+        help
+            Hotspot name, 1 to 32 bytes.
+
+    config CAMERA_AP_PASSWORD
+        string "Camera hotspot password"
+        depends on CAMERA_WIFI_APSTA
+        default "123456789"
+        help
+            WPA2 password, 8 to 63 bytes. This password is compiled into firmware.
+
+endmenu
+
+menu "Vehicle Motor Control"
+
+    config MOTOR_ENABLED
+        bool "Enable PCA9685 and two TB6612FNG motor drivers"
+        depends on SCCB_HARDWARE_I2C_DRIVER_NEW
+        default y
+        help
+            Software I2C: SDA GPIO13, SCL GPIO14; no hardware controller used.
+            Motors remain stopped until a webpage command is received.
+            Missing motor hardware does not prevent camera startup.
+
+    config MOTOR_I2C_ADDRESS
+        hex "PCA9685 7-bit I2C address"
+        range 0x40 0x77
+        default 0x40
+
+    config MOTOR_INVERT_MASK
+        hex "Reverse wheel wiring (bit0 FL, bit1 FR, bit2 RL, bit3 RR)"
+        range 0x0 0xf
+        default 0x0
+        help
+            Set a bit if that wheel runs backwards for a positive wheel command.
+            Actual wheel polarity must be checked with the wheels lifted.
+
+endmenu
+
+menu "Optional Robot Arm"
+    config ARM_ENABLED
+        bool "Enable second PCA9685 and two SG90 servos"
+        depends on MOTOR_ENABLED
+        default y
+        help
+            Wheel SDA=13, arm SDA=2, common SCL=14. Both boards use 0x40.
+            Keep address pads open. GPIO12 is not used. OLED pins unchanged.
+            Disconnect GPIO2 SDA before serial flashing. Requires 3.3V pullups.
+            Outputs stay off until an explicit command; missing arm is optional.
+    config ARM_JOINT0_MIN
+        int "Joint 0 minimum nominal angle (degrees)"
+        range 0 180
+        default 5
+    config ARM_JOINT0_MAX
+        int "Joint 0 maximum nominal angle (degrees)"
+        range ARM_JOINT0_MIN 180
+        default 175
+    config ARM_JOINT1_MIN
+        int "Joint 1 minimum nominal angle (degrees)"
+        range 0 180
+        default 5
+    config ARM_JOINT1_MAX
+        int "Joint 1 maximum nominal angle (degrees)"
+        range ARM_JOINT1_MIN 180
+        default 175
+endmenu

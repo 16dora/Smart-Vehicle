@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>退出登录</title></head>
+<body><h1>退出小车控制</h1><p>退出后会关闭本账号的控制连接，请先确认小车已停车。</p><button id="logout">退出登录</button><p id="message"></p><a href="/">返回控制页</a>
+<script>
+async function logout() {
+  try {
+    const response = await fetch('/api/logout', {method:'POST',credentials:'same-origin'});
+    if (!response.ok) throw new Error('退出失败');
+    location.replace('/login');
+  } catch(error) { document.getElementById('message').textContent = error.message; }
+}
+document.getElementById('logout').addEventListener('click', logout);
+</script></body></html>

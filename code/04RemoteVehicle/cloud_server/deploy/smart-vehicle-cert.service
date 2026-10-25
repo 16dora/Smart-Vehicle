@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew Smart Vehicle IP TLS Certificate
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/smart-vehicle-certbot/bin/certbot renew --quiet --deploy-hook /usr/local/libexec/smart-vehicle-renew

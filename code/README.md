@@ -1,4 +1,4 @@
-# ESP32 固件子项目
+# 小车固件与云端子项目
 
 每个可独立编译、烧录的工程放在 `code/` 下独立的子文件夹中。
 当前工程：
@@ -6,6 +6,7 @@
 - `01SerialLoopBackTest/`：UART0 心跳与逐行回显。
 - `02CameraWebServer/`：AI-Thinker ESP32-CAM 摄像头网页、MJPEG 预览、图像设置及 PCA9685＋TB6612FNG 四轮控制。
 - `03CameraApSta/`：复制 02 功能并同时开启热点与路由器连接，热点密码为 `123456789`。
+- `04RemoteVehicle/`：云端登录与远程控制；`cloud_server/` 为 Ubuntu C++/Drogon CMake 工程，`vehicle_firmware/` 为独立 ESP-IDF 固件。
 
 后续工程沿用编号加功能名称的目录形式，例如 `03GpioTest/`。
 每个工程分别维护 `CMakeLists.txt`、`source/`、`include/`、

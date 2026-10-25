@@ -1,0 +1,1271 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart Vehicle · 相机与车辆控制</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,"Microsoft YaHei",sans-serif;background:#0c1421;color:#e5edf7}
+    *{box-sizing:border-box}body{margin:0}main{max-width:1500px;margin:auto;padding:28px 20px}
+    header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}
+    h1{font-size:25px;margin:8px 0}h2{font-size:17px;margin:0 0 20px}.eyebrow{font-size:12px;letter-spacing:2px;color:#80c5ff}
+    .muted{color:#9caec5;font-size:13px;line-height:1.7}.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+    .layout>*{min-width:0}
+    .card{background:#142034;border:1px solid #293a53;border-radius:16px;padding:20px}.preview{position:relative;width:100%;max-width:calc(70vh * 4 / 3);margin-inline:auto;background:#060c15;min-height:0;aspect-ratio:4/3;display:grid;place-items:center;border-radius:10px;overflow:hidden}
+    .preview img{width:100%;height:auto;display:block}.preview:has(img:not([hidden])){aspect-ratio:auto}.placeholder{color:#8193ac;text-align:center;padding:30px}.toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px}
+    button,.button{font:inherit;font-size:14px;padding:10px 16px;border:1px solid #425672;border-radius:8px;background:#21334e;color:#e5edf7;cursor:pointer;text-decoration:none}
+    button{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+    button.primary{background:#66b8f6;color:#071422;border:0;font-weight:600}button:disabled{opacity:.45;cursor:wait}
+    .number{font-size:23px;font-variant-numeric:tabular-nums}.unit{font-size:12px;color:#9caec5}
+    label{display:block;font-size:14px;margin-bottom:8px}.field{margin-bottom:22px}select,input[type=number]{font:inherit;background:#0e192a;color:#e5edf7;border:1px solid #425672;padding:9px;border-radius:7px;width:100%}
+    input[type=range]{width:100%;accent-color:#66b8f6}output{float:right;color:#8fcbff;font-variant-numeric:tabular-nums}.check{display:flex;align-items:center;gap:10px;margin-bottom:16px}.check input{accent-color:#66b8f6;width:17px;height:17px}
+    #message{min-height:24px;font-size:13px;color:#8fcbff;margin-top:14px}#message.error{color:#ffb4ab}.badge{font-size:12px;border:1px solid #425672;padding:7px 12px;border-radius:30px;color:#b6d9f8}
+    fieldset{padding:0;border:0;margin:0;min-width:0}[hidden]{display:none!important}
+    .video-overlay{position:absolute;top:8px;left:10px;right:10px;z-index:1;display:flex;flex-wrap:wrap;align-items:center;gap:3px 12px;color:#55ff75;font-size:11px;line-height:1.5;font-weight:500;font-variant-numeric:tabular-nums;text-shadow:0 1px 2px #000,1px 0 2px #000;pointer-events:none}
+    .video-overlay>span{white-space:nowrap}.video-overlay .metric-alert{color:#ff6464}
+    .control-panels{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:16px;margin-top:16px;align-items:start}
+    .drive{min-width:0;margin:0;padding:14px;border:1px solid #293a53;border-radius:10px}
+    .control-panels button{padding:9px 10px;font-size:13px}
+    .control-panels .muted{font-size:12px;line-height:1.6}
+    .drive h2{margin-bottom:8px}
+    .operation-tabs{margin-top:20px}
+    .operation-panels{display:grid}
+    .operation-panels>[role=tabpanel]{grid-area:1/1;min-width:0;align-self:start}
+    /* 两页共同决定操作区高度，隐藏页不响应输入，切换时上下公共区域不跳动。 */
+    .operation-panels>[role=tabpanel][hidden]{display:block!important;visibility:hidden;pointer-events:none}
+    .fps-row{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap}
+    .fps-row input[type=number]{width:100px;flex:0 0 100px}
+    .fps-live{font-size:13px;color:#9caec5;white-space:nowrap}.fps-live strong{color:#8fcbff;font-variant-numeric:tabular-nums}
+    .tab-list{display:flex;gap:8px;flex-wrap:wrap;max-width:100%;margin:0}
+    .tab-list button{white-space:nowrap}.tab-list [aria-selected=true]{background:#66b8f6;border-color:#66b8f6;color:#071422;font-weight:600}
+    #settings{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 24px;align-items:start}
+    #settings .field{margin:0}#settings #manualExposure{grid-column:span 2}
+    .arm-joints{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .arm-target-row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+    .arm-target-row input[type=number]{width:84px;flex:0 0 84px;padding:8px}
+    .arm-target-row button{white-space:nowrap;flex:0 0 auto}
+    .arm-step-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.arm-step-actions button{flex:1;white-space:nowrap}
+    .arm-joint label{font-weight:600}.arm-target{min-height:38px;overflow-wrap:anywhere}
+    .arm-keys{margin:12px 0}
+    .runtime{margin-top:24px;padding-top:20px;border-top:1px solid #293a53}.runtime h2{margin-bottom:14px}
+    .runtime-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px}.runtime .number{font-size:20px}
+    .drive-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:400px;margin:16px auto 8px}
+    .drive-turn{display:flex;gap:8px;max-width:400px;margin:auto}.drive-turn button{flex:1}
+    [data-arm-step]{touch-action:none;user-select:none}
+    [data-drive]{touch-action:none;user-select:none;-webkit-user-select:none;min-height:48px}
+    [data-drive].held{background:#66b8f6;color:#071422}.drive-stop{background:#7b353c;border-color:#c16a72}
+    .arm-joint{min-width:0;margin:12px 0;padding:14px;border:1px solid #425672;border-radius:10px}.arm-joint .toolbar{margin-top:10px}#armMessage{line-height:1.8;color:#b6d9f8}
+    #motorMessage{min-height:24px;color:#b6d9f8;font-size:13px;line-height:1.7}
+    @media(max-width:1050px){.control-panels{grid-template-columns:minmax(0,1fr)}#settings{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:640px){.control-panels{grid-template-columns:minmax(0,1fr)}.video-overlay{font-size:10px;gap:2px 8px;top:6px;left:7px;right:7px}}
+    @media(max-width:420px){.arm-joints,#settings{grid-template-columns:minmax(0,1fr)}#settings #manualExposure{grid-column:auto}.tab-list button{min-width:0;flex:1}}
+    @media(max-width:780px){.layout{grid-template-columns:minmax(0,1fr)}header{align-items:flex-start;flex-wrap:wrap}.preview{min-height:0}main{padding:20px 14px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">SMART VEHICLE / CAMERA &amp; DRIVE</div><h1>车辆控制台</h1><div class="muted">实时画面、图像设置与四轮控制</div></div>
+    <span class="badge" id="connection">正在连接设备</span>
+  </header>
+
+  <div class="layout">
+    <section class="card" id="dashboard" aria-label="相机与设备控制">
+      <div class="preview">
+        <div class="placeholder" id="placeholder">相机已准备<br><span class="muted">点击“开始预览”查看画面</span></div>
+        <img id="video" alt="摄像头实时画面" hidden>
+        <div class="video-overlay" aria-label="实时视频状态">
+          <span id="actualFpsMetric">发送 <span id="actualFps">--</span> FPS</span>
+          <span title="当前积分时间为估算值">积分 <span id="exposureTime">--</span> ms</span>
+          <span id="cpu0BusyMetric" title="CPU 忙碌率为估算值">CPU0 <span id="cpu0Busy">--</span>%</span>
+          <span id="cpu1BusyMetric" title="CPU 忙碌率为估算值">CPU1 <span id="cpu1Busy">--</span>%</span>
+          <span><span id="rssiLabel">Wi-Fi</span> <span id="wifiRssi">--</span> dBm</span>
+          <span id="motorStateMetric" class="metric-alert">车辆 <span id="motorState">等待状态</span></span>
+          <span id="armStateMetric" class="metric-alert">机械臂 <span id="armState">等待状态</span></span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="primary" id="start" disabled>开始预览</button>
+        <button id="stop" disabled>停止预览</button>
+        <a class="button" href="/capture" target="_blank" rel="noopener">查看单张照片</a>
+        <button type="button" id="ledToggle" aria-pressed="false" disabled>打开补光灯</button>
+        <nav class="tab-list" role="tablist" aria-label="控制台页面">
+          <button type="button" id="tabControl" role="tab" aria-controls="controlPanel" aria-selected="true" tabindex="0">Tab1 · 控制</button>
+          <button type="button" id="tabImage" role="tab" aria-controls="imagePanel" aria-selected="false" tabindex="-1">Tab2 · 图像设置</button>
+        </nav>
+      </div>
+      <div class="operation-tabs">
+        <div class="operation-panels">
+          <section id="controlPanel" role="tabpanel" aria-labelledby="tabControl" aria-hidden="false">
+      <div class="control-panels">
+      <div class="drive">
+        <h2>车辆控制</h2>
+        <fieldset id="motorSettings" disabled>
+          <label for="motorSpeed">速度（最大轮占空比） <output id="motorSpeedValue">45%</output></label>
+          <input id="motorSpeed" type="range" min="0" max="100" step="5" value="45">
+          <div class="drive-grid">
+            <button data-drive data-forward="1" data-right="-1" data-turn="0">↖ 左前 Z</button>
+            <button data-drive data-forward="1" data-right="0" data-turn="0">↑ 前进 W</button>
+            <button data-drive data-forward="1" data-right="1" data-turn="0">↗ 右前 X</button>
+            <button data-drive data-forward="0" data-right="-1" data-turn="0">← 左移 A</button>
+            <button class="drive-stop" id="motorStop">停车</button>
+            <button data-drive data-forward="0" data-right="1" data-turn="0">右移 D →</button>
+            <button data-drive data-forward="-1" data-right="-1" data-turn="0">↙ 左后 C</button>
+            <button data-drive data-forward="-1" data-right="0" data-turn="0">↓ 后退 S</button>
+            <button data-drive data-forward="-1" data-right="1" data-turn="0">↘ 右后 V</button>
+          </div>
+          <div class="drive-turn">
+            <button data-drive data-forward="0" data-right="0" data-turn="-1">↶ 原地左转 Q</button>
+            <button data-drive data-forward="0" data-right="0" data-turn="1">原地右转 E ↷</button>
+          </div>
+        </fieldset>
+        <p id="motorMessage" role="status" aria-live="polite">正在检查电机模块…</p>
+        <p class="muted">键盘：W/S 前后，A/D 平移，Q/E 原地左右转，Z/X 左前/右前，C/V 左后/右后；空格停车。按住行驶，松开停车。</p>
+        <p class="muted">按住方向键行驶，松手停车。首次使用请架空车轮核对方向；速度表示 PWM 占空比，不是实测轮速。</p>
+        <p class="muted">指令中断约 0.5 秒自动停车。当前按 X 型麦轮布局混控，仅使用一个控制页面操作。</p>
+      </div>
+      <section class="drive" aria-label="可选机械臂控制">
+        <h2>机械臂控制</h2>
+        <fieldset id="armSettings" disabled>
+          <div class="arm-joints">
+          <div class="arm-joint">
+            <label for="armAngle0">关节 1 / CH14</label>
+            <div class="muted arm-target" id="armTarget0">未给定目标</div>
+            <div class="arm-target-row"><input id="armAngle0" type="number" min="5" max="175" step="1" value="90"><button type="button" data-arm-joint="0">发送目标</button></div>
+            <div class="arm-step-actions"><button type="button" data-arm-step="decrease" data-arm-joint="0">减小 J</button><button type="button" data-arm-step="increase" data-arm-joint="0">增加 K</button></div>
+          </div>
+          <div class="arm-joint">
+            <label for="armAngle1">关节 2 / CH15</label>
+            <div class="muted arm-target" id="armTarget1">未给定目标</div>
+            <div class="arm-target-row"><input id="armAngle1" type="number" min="5" max="175" step="1" value="90"><button type="button" data-arm-joint="1">发送目标</button></div>
+            <div class="arm-step-actions"><button type="button" data-arm-step="decrease" data-arm-joint="1">减小 U</button><button type="button" data-arm-step="increase" data-arm-joint="1">增加 I</button></div>
+          </div>
+          </div>
+          <button type="button" id="armRelease" class="drive-stop">释放两个关节（承重时可能下垂）</button>
+        </fieldset>
+        <p id="armMessage" role="status" aria-live="polite">正在检查可选机械臂…</p>
+        <p class="muted">上电不自动动作。输入目标后点击发送；首次请卸载连杆确认方向和行程。显示为标称目标角度，没有实际位置反馈。先发送初始角度，再按住增减按钮，每条指令目标增减 15°，本地小步平滑推进；松开保持，软件限位自动停止。</p>
+        <p class="muted arm-keys">键盘：关节 1 减小 J / 增加 K；关节 2 减小 U / 增加 I。按住调节，松开保持。</p>
+        <p class="muted">关节 1：<span id="armLimits0">等待软件限位</span>；关节 2：<span id="armLimits1">等待软件限位</span>。</p>
+        <p class="muted">软件限位不能检测机械碰撞或堵转。断网后保持已设目标；释放输出并不保证能保持当前位置。</p>
+      </section>
+      </div>
+          </section>
+    <section id="imagePanel" role="tabpanel" aria-labelledby="tabImage" aria-hidden="true" hidden inert>
+      <h2>图像设置</h2>
+      <fieldset id="settings" disabled>
+        <div class="field"><label for="size">分辨率</label><select id="size" data-setting>
+          <option value="0">160 × 120 · QQVGA</option><option value="1">320 × 240 · QVGA</option>
+          <option value="2" selected>640 × 480 · VGA</option><option value="3">800 × 600 · SVGA</option>
+          <option value="4">1024 × 768 · XGA</option><option value="5">1600 × 1200 · UXGA</option>
+        </select></div>
+        <div class="field"><label for="quality">JPEG 压缩值 <output id="qualityValue">12</output></label>
+          <input id="quality" data-setting type="range" min="10" max="63" value="12"><div class="muted">数值越小，画质越高、数据量越大</div></div>
+        <div class="field"><label for="max_fps">最大帧率（1–30 FPS）</label><div class="fps-row"><input id="max_fps" data-setting type="number" min="1" max="30" step="1" value="10"><span class="fps-live">发送上限 <strong id="limitFps">10</strong> FPS</span></div></div>
+        <label class="check"><input id="auto_exposure" data-setting type="checkbox" checked>自动曝光</label>
+        <div class="field" id="manualExposure">
+          <label for="exposure_ms">手动积分时间（ms）</label>
+          <input id="exposure_ms" data-setting type="number" min="0.001" max="1000" step="0.001" value="1" disabled>
+          <label for="exposureSlider" class="muted">拖动调节积分时间</label>
+          <input id="exposureSlider" type="range" min="0.001" max="1000" step="0.001" value="1" disabled>
+          <div class="muted" id="exposureHint">正在读取曝光参数…</div>
+          <div class="muted">毫秒值由曝光寄存器与传感器时序换算，约每 2 秒更新。自动增益仍保持开启，画面亮度可能继续调整。</div>
+        </div>
+        <div class="field"><label for="brightness">亮度 <output id="brightnessValue">0</output></label><input id="brightness" data-setting type="range" min="-2" max="2" value="0"></div>
+        <div class="field"><label for="contrast">对比度 <output id="contrastValue">0</output></label><input id="contrast" data-setting type="range" min="-2" max="2" value="0"></div>
+        <div class="field"><label for="saturation">饱和度 <output id="saturationValue">0</output></label><input id="saturation" data-setting type="range" min="-2" max="2" value="0"></div>
+        <label class="check"><input id="hmirror" data-setting type="checkbox">水平镜像</label>
+        <label class="check"><input id="vflip" data-setting type="checkbox">垂直翻转</label>
+      </fieldset>
+    </section>
+        </div>
+      </div>
+      <p class="muted" id="networkHint">热点与路由器状态等待设备回报。</p>
+      <div id="message" role="status" aria-live="polite">正在读取相机设置…</div>
+      <p class="muted">实际帧率取决于分辨率、画质、光照和无线网络。当前支持一个视频预览连接。设置在重启后恢复默认。</p>
+      <section class="runtime" aria-label="设备运行状态">
+        <h2>设备运行状态</h2>
+        <div class="runtime-grid">
+          <div><div class="muted">CPU 当前频率</div><span class="number" id="cpuMhz">--</span> <span class="unit">MHz</span></div>
+          <div><div class="muted">内部可用堆</div><span class="number" id="internalFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted">PSRAM 可用堆</div><span class="number" id="psramFree">--</span> <span class="unit">KiB</span></div>
+          <div><div class="muted">视频有效载荷发送速率</div><span class="number" id="videoRate">--</span> <span class="unit">KB/s</span><div class="muted"><span id="videoMbps">--</span> Mbps</div></div>
+          <div><div class="muted">已完成帧平均取帧等待</div><span class="number" id="captureMs">--</span> <span class="unit">ms</span></div>
+          <div><div class="muted">已完成帧平均发送耗时</div><span class="number" id="sendMs">--</span> <span class="unit">ms</span></div>
+        </div>
+        <p class="muted" id="runtimeHint" role="status">等待统计采样，首轮 CPU 只建立基线。</p>
+        <p class="muted">常规约每 2 秒采样。速率统计完整提交的 JPEG，不含协议开销和重传；不代表浏览器已接收或显示。取帧等待不等于传感器积分时间。</p>
+      </section>
+    </section>
+
+  </div>
+</main>
+<script>
+'use strict';
+// 控件与网络请求在浏览器主线程串行处理，不使用额外前端依赖。
+const controls = document.querySelectorAll('[data-setting]');
+const video = document.getElementById('video');
+const startButton = document.getElementById('start');
+const stopButton = document.getElementById('stop');
+const settings = document.getElementById('settings');
+// 首次读取成功前禁用设置；轮询只刷新状态，避免覆盖用户尚未提交的输入。
+let initialized = false;
+// 正在提交设置时暂停状态轮询，避免旧响应覆盖刚提交的新数值。
+let saving = false;
+// 同时只允许一个状态请求，设备响应慢时不继续堆积浏览器连接。
+let polling = false;
+// 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
+let previewing = false;
+// 输入尚未提交时，状态轮询仍更新实测显示，但不能覆盖用户正在调节的手动值。
+let exposureEditing = false;
+// 每次设置提交递增，丢弃该设置之前发起的状态请求，避免旧曝光模式覆盖新设置。
+let settingsVersion = 0;
+// 电机控件和状态独立于相机设置，不会因图像设置保存而重建运动连接。
+const motorSettings = document.getElementById('motorSettings');
+// 当前按住的单个按钮；多指触摸不能覆盖已持有的方向。
+let driveButton = null;
+// 按下时捕获的指针编号，用于过滤其他手指的抬起事件。
+let drivePointer = null;
+// 本地操作代次：松手、失焦或失败时递增，丢弃过期异步返回。
+let driveVersion = 0;
+// 服务器停车代次；每次按下先停车取得新值，再允许发送非零指令。
+let motorGeneration = 0;
+// 握手完成后才允许周期续租，避免停车响应之前发出运动请求。
+let driveArmed = false;
+// 握手或续租错误仅显示到下一次实际操作，不被状态轮询立即覆盖。
+let driveError = '';
+// 运动与视频分别使用独立端口，不占用相机控制服务的请求队列。
+const motorUrl = new URL('/motor', location.href);
+// 云端视频和控制共用当前 HTTPS 入口。
+// 运动二进制帧在常连接上发送，不等待逐条状态回报。
+const motorSocketUrl = new URL('/motor/ws', motorUrl);
+motorSocketUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+// 正常每 100 ms 续期；设备端仍为 500 ms 无有效指令停车。
+const DRIVE_PERIOD_MS = 100;
+// 单个续期定时器；松手或失败时清除，不保留旧操作的定时任务。
+let driveTimer = 0;
+// 当前运动连接；旧连接事件必须按对象身份丢弃。
+let motorSocket = null;
+// 每个连接从 1 开始的命令序号，重连后重置，接收端拒绝重复或倒序。
+let socketSeq = 0;
+// 正在等待的停车序号；只有确认该序号之后的状态，才允许开始下一次运动。
+let waitSequence = 0;
+// 等待目的：arm 为按住前停车，stop 为松手后确认。
+let waitMode = '';
+// 最近有效回报序号，避免迟到状态覆盖更新状态。
+let reportSequence = 0;
+// 最近回报、建连、只读查询和重试的单调时间，单位毫秒。
+let lastReportMs = 0;
+let socketOpenedMs = 0;
+let lastQueryMs = 0;
+let reconnectAtMs = 0;
+// 待发送区固定为每类一个槽，短暂发送繁忙只替换最新值，不累计历史目标。
+let queuedDrive = null;
+let queuedArm = null;
+let queuedWheelStop = null;
+let queuedArmAction = null;
+let queuedDriveQuery = null;
+let queuedArmQuery = null;
+let controlSendTimer = 0;
+// -1 表示没有持续积压；200 ms 持续积压才按传输故障关闭连接。
+let sendBlockedMs = -1;
+// 页面退出后不再自动重建控制连接。
+let pageLeaving = false;
+// 默认控制标签；切换设置页后暂停一切输入操作，不重建连接。
+let currentTab = 'control';
+let driveKey = '';
+let armKey = '';
+
+// 机械臂复用运动连接，命令代次和回报序号独立，不创建第二条控制连接。
+const armSettings = document.getElementById('armSettings');
+let armSnapshot = null;
+let armBusy = false;
+let armPendingSeq = 0;
+let armPendingAt = 0;
+let armReportSeq = 0;
+let armAckMs = 0;
+let armQueryMs = 0;
+let armStepButton = null;
+let armStepPointer = null;
+let armStepTimer = 0;
+// 每次结束按住递增，过滤已结束手势留下的待发目标。
+let armStepEpoch = 0;
+// 补光灯设置使用独立版本，轮询旧回报不能覆盖刚确认的开关。
+let ledKnown = null;
+let ledBusy = false;
+let ledVersion = 0;
+
+
+// 输入：文本和错误标识；输出：无；作用：集中显示操作结果。
+function showMessage(text, error = false) {
+  const message = document.getElementById('message');
+  message.textContent = text;
+  message.classList.toggle('error', error);
+}
+
+// 输入：服务器状态；输出：无；作用：同步全部参数，失败时也可回滚控件。
+function updateControls(state) {
+  for (const control of controls) {
+    // 手动曝光使用毫秒显示，设备接口使用整数微秒，单独完成范围与单位同步。
+    if (control.id === 'exposure_ms') continue;
+    if (control.type === 'checkbox') control.checked = Boolean(state[control.id]);
+    else control.value = state[control.id];
+    updateValue({target: control});
+  }
+  exposureEditing = false;
+  updateExposure(state, true);
+}
+
+// 输入：设备状态及是否覆盖输入；输出：无；作用：刷新曝光估算、模式和硬件允许范围。
+function updateExposure(state, sync = false) {
+  const input = document.getElementById('exposure_ms');
+  const slider = document.getElementById('exposureSlider');
+  const isValid = state.exposure_valid === true && Number.isFinite(state.exposure_us) &&
+    state.exposure_min_us > 0 && state.exposure_max_us >= state.exposure_min_us;
+  document.getElementById('exposureTime').textContent = isValid ? (state.exposure_us / 1000).toFixed(3) : '--';
+  document.getElementById('auto_exposure').checked = Boolean(state.auto_exposure);
+  input.disabled = slider.disabled = !isValid || Boolean(state.auto_exposure);
+  if (!isValid) {
+    // 无效样本不冒充当前曝光；自动开关仍可用，下次状态读取继续恢复。
+    document.getElementById('exposureHint').textContent = '曝光参数暂不可用，等待下次读取。';
+    return;
+  }
+  const low = state.exposure_min_us / 1000;
+  const high = state.exposure_max_us / 1000;
+  input.min = slider.min = low.toFixed(3);
+  input.max = slider.max = high.toFixed(3);
+  // 自动模式随硬件读数刷新；手动模式仅在初始化、提交成功或无人编辑时同步。
+  if (sync || state.auto_exposure || !exposureEditing) {
+    const value = Math.min(high, Math.max(low, state.exposure_us / 1000)).toFixed(3);
+    input.value = slider.value = value;
+  }
+  document.getElementById('exposureHint').textContent =
+    (state.auto_exposure ? '自动曝光已开启，关闭后可手动调节。' : '手动曝光已开启。') +
+    '范围 ' + low.toFixed(3) + '–' + high.toFixed(3) + ' ms；以一个行周期约 ' +
+    (state.line_us / 1000).toFixed(3) + ' ms 为单位取整。';
+}
+
+// 输入：浮层字段、显示文本和告警标记；输出：无；作用：每项独立变色，恢复正常时清除红色。
+function setOverlayValue(id, text, isAlert = false) {
+  document.getElementById(id).textContent = text;
+  document.getElementById(id + 'Metric').classList.toggle('metric-alert', isAlert);
+}
+
+// 输入：设备状态或空值；输出：无；作用：显示运行采样，过期或失败时不保留旧的负载与速率。
+function updateRuntime(state) {
+  const runtime = state && state.runtime;
+  const isFresh = runtime && state.runtime_age_ms >= 0 && state.runtime_age_ms <= 10000 &&
+    Number.isFinite(runtime.cpu_mhz);
+  const ids = ['cpu0Busy', 'cpu1Busy', 'cpuMhz', 'internalFree', 'psramFree',
+    'wifiRssi', 'videoRate', 'videoMbps', 'captureMs', 'sendMs'];
+  if (!isFresh) {
+    // 初始化、请求失败或采样超过十秒都明确显示不可用，下一次有效轮询会恢复。
+    for (const id of ids) document.getElementById(id).textContent = '--';
+    setOverlayValue('cpu0Busy', '--'); setOverlayValue('cpu1Busy', '--');
+    document.getElementById('runtimeHint').textContent = '运行统计暂不可用，等待新的设备采样。';
+    return;
+  }
+  setOverlayValue('cpu0Busy', runtime.cpu_valid ? runtime.cpu0_pct.toFixed(1) : '--',
+    Boolean(runtime.cpu_valid && runtime.cpu0_pct > 90));
+  setOverlayValue('cpu1Busy', runtime.cpu_valid ? runtime.cpu1_pct.toFixed(1) : '--',
+    Boolean(runtime.cpu_valid && runtime.cpu1_pct > 90));
+  document.getElementById('cpuMhz').textContent = runtime.cpu_mhz.toFixed(0);
+  document.getElementById('internalFree').textContent = (runtime.internal_free / 1024).toFixed(1);
+  document.getElementById('psramFree').textContent = (runtime.psram_free / 1024).toFixed(1);
+  document.getElementById('rssiLabel').textContent = runtime.rssi_source === 'sta' ? '路由器' : '热点客户端';
+  document.getElementById('wifiRssi').textContent = runtime.rssi_valid ? String(runtime.rssi_dbm) : '--';
+  const hasWindow = runtime.window_ms > 0;
+  document.getElementById('videoRate').textContent = hasWindow ? (runtime.video_Bps / 1000).toFixed(1) : '--';
+  document.getElementById('videoMbps').textContent = hasWindow ? (runtime.video_Bps * 8 / 1000000).toFixed(3) : '--';
+  // 没有完成帧时吞吐为零，但平均耗时没有样本，不能显示成零毫秒。
+  document.getElementById('captureMs').textContent = runtime.frames > 0 ? runtime.capture_ms.toFixed(1) : '--';
+  document.getElementById('sendMs').textContent = runtime.frames > 0 ? runtime.send_ms.toFixed(1) : '--';
+  document.getElementById('runtimeHint').textContent =
+    (state.video_active ? '预览处理中；' : '当前未预览；') + '近 ' + (runtime.window_ms / 1000).toFixed(1) +
+    ' 秒完成 ' + runtime.frames + ' 帧；采样于 ' + (state.runtime_age_ms / 1000).toFixed(1) + ' 秒前。' +
+    (runtime.ap_clients >= 0 ? '热点接入 ' + runtime.ap_clients + ' 台。' : '') +
+    (runtime.cpu_valid ? '' : 'CPU 忙碌率等待有效采样窗口。');
+}
+
+// 输入：双接口状态；输出：无；作用：同时展示热点入口和路由器入口，断线不保留旧地址。
+function updateNetwork(network) {
+  if (!network) {
+    document.getElementById('connection').textContent = '网络状态未知';
+    document.getElementById('networkHint').textContent = '等待 AP＋STA 状态。';
+    return;
+  }
+  document.getElementById('connection').textContent =
+    (network.ap_ready ? '热点已开启' : '热点未就绪') + ' · ' +
+    (network.sta_connected ? '路由器已连接' : '路由器重连中');
+  document.getElementById('networkHint').textContent =
+    'AP＋STA · 热点入口：' + (network.ap_ready ? 'http://' + network.ap_ip + '/' : '未就绪') +
+    '；路由器入口：' + (network.sta_connected ? 'http://' + network.sta_ip + '/' : '未取得地址，热点仍可使用') +
+    '。两种入口共用相机和车辆，请仅使用一个控制页面。';
+}
+
+// 输入：控件事件；输出：无；作用：拖动滑块时仅显示本地值，不连续发送请求。
+function updateValue(event) {
+  if (event.target.id === 'exposure_ms' || event.target.id === 'exposureSlider') {
+    // 滑块和数值框只在本地联动，松开或确认输入后才提交一次设置。
+    const peer = event.target.id === 'exposure_ms' ? 'exposureSlider' : 'exposure_ms';
+    document.getElementById(peer).value = event.target.value;
+    exposureEditing = true;
+    return;
+  }
+  const output = document.getElementById(event.target.id + 'Value');
+  if (output) output.value = event.target.value;
+}
+
+// 输入：错误类型和说明；输出：错误对象；作用：避免把所有失败都描述为 Wi-Fi 断开。
+function requestError(kind, message) {
+  const error = new Error(message);
+  error.kind = kind;
+  return error;
+}
+
+// 输入：错误对象；输出：可读说明；作用：区分超时、HTTP 错误、数据错误和网络错误。
+function describeError(error) {
+  if (error.kind === 'timeout') return '设备响应超时，可能正忙；尚不能判定 Wi-Fi 已断开。';
+  if (error.kind === 'http') return '设备服务返回错误：' + error.message;
+  if (error.kind === 'network') return '网络请求失败，请检查设备地址及局域网连接。';
+  if (error instanceof SyntaxError) return '设备返回的数据格式不正确，请重新加载页面。';
+  return '网页请求异常：' + error.message;
+}
+
+// 输入：请求路径和选项；输出：响应正文；作用：使用兼容手机浏览器的原生五秒超时。
+function request(path, options = {}) {
+  // XMLHttpRequest 的超时覆盖完整正文接收，不依赖较新的 AbortSignal.timeout。
+  return new Promise(function executeRequest(resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method || 'GET', path, true);
+    xhr.timeout = options.timeout || 5000;
+    xhr.onload = function requestLoaded() {
+      if (xhr.status === 401) { location.replace('/login'); reject(requestError('http', '登录已过期')); }
+      else if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+      else {
+        const failure = requestError('http', 'HTTP ' + xhr.status + ' ' + xhr.responseText.slice(0, 160));
+        failure.status = xhr.status; reject(failure);
+      }
+    };
+    xhr.onerror = function requestFailed() {
+      reject(requestError('network', '网络请求失败'));
+    };
+    xhr.ontimeout = function requestTimedOut() {
+      reject(requestError('timeout', '请求超时（' + xhr.timeout + ' ms）'));
+    };
+    if (options.body !== undefined) {
+      xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded;charset=UTF-8');
+      xhr.send(options.body.toString());
+    } else xhr.send();
+  });
+}
+
+// 输入：无；输出：无；作用：读取实际发送帧率，失败后下次轮询继续重试。
+async function pollStatus() {
+  if (saving || polling) return;
+  polling = true;
+  const version = settingsVersion;
+  const ledReadVersion = ledVersion;
+  try {
+    const state = JSON.parse(await request('/status'));
+    // 设置提交期间，旧轮询响应不覆盖页面中的最新操作结果。
+    if (saving || version !== settingsVersion) return;
+    updateRuntime(state);
+    updateExposure(state);
+    if (!ledBusy && ledReadVersion === ledVersion) updateLed(state);
+    setOverlayValue('actualFps', Number.isFinite(state.actual_fps) ? state.actual_fps.toFixed(1) : '--',
+      Number.isFinite(state.actual_fps) && state.actual_fps < 5);
+    document.getElementById('limitFps').textContent = state.max_fps;
+    updateNetwork(state.network);
+    if (!previewing) {
+      document.getElementById('placeholder').firstChild.nodeValue = '相机已准备';
+      document.querySelector('#placeholder .muted').textContent = '点击“开始预览”查看画面';
+    }
+    if (!initialized) {
+      updateControls(state);
+      initialized = true;
+      settings.disabled = false;
+      startButton.disabled = previewing;
+      showMessage('已连接。可以开始预览或调整图像。');
+    }
+  } catch (error) {
+    // 设置成功后，旧轮询的迟到失败也不能禁用已经恢复的控件。
+    if (saving || version !== settingsVersion) return;
+    updateRuntime(null);
+    setOverlayValue('actualFps', '--');
+    if (!ledBusy && ledReadVersion === ledVersion) updateLed(null);
+    document.getElementById('connection').textContent = error.status === 503 ? '小车离线' : error.kind === 'timeout' ? '设备响应超时' : '状态读取失败';
+    document.getElementById('networkHint').textContent = error.status === 503 ? '小车尚未连接云服务器，等待小车联网。' : '设备状态未知，请检查小车网络。';
+    if (!previewing) {
+      document.getElementById('placeholder').firstChild.nodeValue = '等待小车连接';
+      document.querySelector('#placeholder .muted').textContent = '设备上线后即可开始预览';
+    }
+    showMessage(describeError(error), true);
+    initialized = false;
+    settings.disabled = true;
+    startButton.disabled = true;
+    // 此错误仅代表相机通道异常；运动通道由自己的回复和 500 ms 看门期限判断。
+  } finally {
+    polling = false;
+  }
+}
+
+// 输入：设置控件事件；输出：无；作用：提交单项设置并以设备返回值为准。
+async function changeSetting(event) {
+  // 滑块复用毫秒数值框的校验与请求路径，不额外创建连续调节连接。
+  const control = event.target.id === 'exposureSlider' ? document.getElementById('exposure_ms') : event.target;
+  if (saving) return;
+  if (!control.checkValidity()) {
+    control.reportValidity();
+    return;
+  }
+  saving = true;
+  ++settingsVersion;
+  settings.disabled = true;
+  const name = control.id === 'exposure_ms' ? 'exposure_us' : control.id;
+  const value = control.id === 'exposure_ms' ? Math.round(Number(control.value) * 1000) :
+    control.type === 'checkbox' ? Number(control.checked) : control.value;
+  try {
+    const response = await request('/control', {
+      method: 'POST', body: new URLSearchParams({var: name, val: value})
+    });
+    const state = JSON.parse(response);
+    updateControls(state);
+    updateRuntime(state);
+    document.getElementById('limitFps').textContent = state.max_fps;
+    showMessage('设置已生效。');
+  } catch (error) {
+    showMessage('设置失败：' + describeError(error), true);
+    // 服务拒绝设置后重新读取实际值，不能让页面停留在未生效的状态。
+    initialized = false;
+    exposureEditing = false;
+  } finally {
+    saving = false;
+    settings.disabled = !initialized;
+  }
+}
+
+// 云端视频通过独立 WebSocket 传递 JPEG，控件布局保持不变。
+let cloudVideo = null;
+let cloudImage = '';
+// 输入：无；输出：无；作用：关闭旧视频连接并回收浏览器图像内存。
+function closeCloudVideo() {
+  const old = cloudVideo; cloudVideo = null;
+  if (old) old.close();
+  if (cloudImage) { URL.revokeObjectURL(cloudImage); cloudImage = ''; }
+}
+// 输入：JPEG 消息；输出：图像；作用：仅解码一帧，完成后才申请下一帧。
+function cloudFrame(event) {
+  if (event.currentTarget !== cloudVideo || !previewing) return;
+  if (!(event.data instanceof Blob)) return;
+  if (cloudImage) URL.revokeObjectURL(cloudImage);
+  cloudImage = URL.createObjectURL(event.data); video.src = cloudImage;
+}
+function cloudFrameLoaded() {
+  if (previewing && cloudVideo && cloudVideo.readyState === WebSocket.OPEN) cloudVideo.send('next');
+}
+function cloudVideoEnded(event) {
+  if (event.currentTarget !== cloudVideo) return;
+  closeCloudVideo(); streamFailed();
+}
+function startPreview() {
+  closeCloudVideo(); previewing = true;
+  const url = new URL('/view/video', location.href);
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  cloudVideo = new WebSocket(url); cloudVideo.binaryType = 'blob';
+  cloudVideo.addEventListener('message', cloudFrame);
+  cloudVideo.addEventListener('close', cloudVideoEnded);
+  cloudVideo.addEventListener('error', cloudVideoEnded);
+  video.hidden = false; document.getElementById('placeholder').hidden = true;
+  startButton.disabled = true; stopButton.disabled = false; showMessage('正在接收视频…');
+}
+async function stopPreview() {
+  previewing = false; closeCloudVideo(); video.removeAttribute('src'); video.hidden = true;
+  document.getElementById('placeholder').hidden = false;
+  stopButton.disabled = true; startButton.disabled = !initialized; showMessage('预览已停止。');
+}
+video.addEventListener('load', cloudFrameLoaded);
+
+// 输入：无；输出：无；作用：视频断线后允许重新打开，不无限自动创建连接。
+function streamFailed() {
+  if (!previewing) return;
+  previewing = false;
+  closeCloudVideo(); video.removeAttribute('src'); video.hidden = true;
+  document.getElementById('placeholder').hidden = false;
+  startButton.disabled = !initialized;
+  stopButton.disabled = true;
+  showMessage('视频连接已结束，请点击开始预览重试。', true);
+}
+
+// 输入：电机快照；输出：无；作用：硬件未就绪时禁用运动，并显示驱动故障。
+function updateMotorState(state) {
+  const ready = Boolean(state && state.enabled && state.ready);
+  motorSettings.disabled = !ready;
+  const message = document.getElementById('motorMessage');
+  if (!state) {
+    setOverlayValue('motorState', '状态未知', true);
+    message.textContent = '等待有效电机状态。';
+  } else if (!state.enabled) {
+    setOverlayValue('motorState', '未启用');
+    message.textContent = '当前固件未启用电机控制。';
+  } else if (!state.ready) {
+    if (driveButton) stopDrive();
+    setOverlayValue('motorState', '驱动故障');
+    message.textContent = '电机不可用（错误码 ' + state.fault + '）。请检查 PCA9685 供电和接线后重启；停车状态不能确认。';
+  } else {
+    setOverlayValue('motorState', state.moving ? '运动指令生效' : '已停车');
+    message.textContent = driveError || (state.moving ? '保持按住方向键，松手即停车。' : '电机已就绪，按住方向键开始。');
+  }
+}
+
+// 输入：无；输出：无；作用：清理本页目标与计时器，不自动恢复已结束的按住动作。
+function clearDrive() {
+  ++driveVersion;
+  clearTimeout(driveTimer);
+  driveTimer = 0;
+  driveArmed = false;
+  waitSequence = 0;
+  waitMode = '';
+  if (driveButton) driveButton.classList.remove('held');
+  driveButton = null;
+  drivePointer = null;
+  driveKey = '';
+  queuedDrive = null; queuedWheelStop = null;
+}
+
+// 输入：说明；输出：无；作用：停止续期并关闭连接，已有运动时仅尝试一次 HTTP 备用停车。
+function failMotorLink(message) {
+  clearControlQueue();
+  loseArmLink(message);
+  const hadDrive = Boolean(driveButton || driveArmed || waitMode);
+  clearDrive();
+  driveError = message;
+  motorSettings.disabled = true;
+  setOverlayValue('motorState', '运动连接中断', true);
+  document.getElementById('motorMessage').textContent = message + '。请松开后重新操作。';
+  const old = motorSocket;
+  motorSocket = null;
+  if (old) old.close();
+  reconnectAtMs = performance.now() + 2000;
+  if (hadDrive) sendDriveStop(driveVersion);
+}
+
+// 输入：待发帧；输出：序号，-1 表示已合并等待发送，0 表示连接不可用。
+function submitControl(frame) {
+  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN) return 0;
+  frame.sequence = -1;
+  if (frame.kind === 2) { queuedDrive = null; queuedWheelStop = frame; }
+  else if (frame.kind === 5 || frame.kind === 6 || frame.kind === 7) { queuedArm = null; queuedArmAction = frame; }
+  else if (frame.kind === 1) queuedDrive = frame;
+  else if (frame.kind === 3 || frame.kind === 4) queuedArm = frame;
+  else if (frame.kind === 0) queuedDriveQuery = frame;
+  else queuedArmQuery = frame;
+  flushControlQueue();
+  return motorSocket ? frame.sequence : 0;
+}
+
+// 输入：无；输出：无；作用：取消本地待发内容，断线与离开页面后不重放旧操作。
+function clearControlQueue() {
+  clearTimeout(controlSendTimer); controlSendTimer = 0;
+  queuedDrive = queuedArm = queuedWheelStop = queuedArmAction = queuedDriveQuery = queuedArmQuery = null;
+  sendBlockedMs = -1;
+}
+
+// 输入：无；输出：无；作用：短暂繁忙每 20 ms 重试，停止优先，其余只保留最新目标。
+function flushControlQueue() {
+  clearTimeout(controlSendTimer); controlSendTimer = 0;
+  if (!motorSocket || motorSocket.readyState !== WebSocket.OPEN || pageLeaving) { clearControlQueue(); return; }
+  // 松手、失效代次及新手势都不能让旧目标延迟发出。
+  if (queuedDrive && (!driveButton || !driveArmed || queuedDrive.version !== driveVersion || queuedDrive.generation !== motorGeneration)) queuedDrive = null;
+  if (queuedArm && (!armStepButton || !armSnapshot || queuedArm.version !== armStepEpoch || queuedArm.generation !== armSnapshot.generation)) queuedArm = null;
+  const frame = queuedWheelStop ||
+    (queuedArmAction && queuedArmAction.kind !== 6 ? queuedArmAction : null) ||
+    queuedArmAction || queuedDrive || queuedArm || queuedDriveQuery || queuedArmQuery;
+  if (!frame) { sendBlockedMs = -1; return; }
+  if (motorSocket.bufferedAmount > 0) {
+    if (sendBlockedMs < 0) sendBlockedMs = performance.now();
+    if (performance.now() - sendBlockedMs >= 200) { failMotorLink('发送持续积压，已停止续期'); return; }
+    controlSendTimer = setTimeout(flushControlQueue, 20);
+    return;
+  }
+  sendBlockedMs = -1;
+  if (socketSeq >= 0xfffffffe) { failMotorLink('指令序号需要重新建立连接'); return; }
+  if (frame === queuedWheelStop) queuedWheelStop = null;
+  else if (frame === queuedArmAction) queuedArmAction = null;
+  else if (frame === queuedDrive) queuedDrive = null;
+  else if (frame === queuedArm) queuedArm = null;
+  else if (frame === queuedDriveQuery) queuedDriveQuery = null;
+  else queuedArmQuery = null;
+  const data = new ArrayBuffer(12);
+  const view = new DataView(data);
+  view.setUint8(0, frame.kind); view.setUint8(1, frame.a); view.setUint8(2, frame.b); view.setUint8(3, frame.c);
+  view.setUint32(4, frame.generation, false);
+  const sequence = ++socketSeq;
+  view.setUint32(8, sequence, false);
+  try { motorSocket.send(data); }
+  catch (error) { failMotorLink('运动数据发送失败：' + error.message); return; }
+  frame.sequence = sequence;
+  // 等到实际发送才绑定确认序号；繁忙期间的旧回报不能完成新的停止握手。
+  if (frame.kind === 2 && waitSequence === -1) waitSequence = sequence;
+  if ((frame.kind === 5 || frame.kind === 6 || frame.kind === 7) && armPendingSeq === -1) {
+    armPendingSeq = sequence; armPendingAt = performance.now();
+  }
+  if (queuedWheelStop || queuedArmAction || queuedDrive || queuedArm || queuedDriveQuery || queuedArmQuery)
+    controlSendTimer = setTimeout(flushControlQueue, 20);
+}
+
+// 输入：车轮动作及三轴；输出：已发送序号或等待标记；作用：查询、目标及停车分槽合并。
+function sendMotorFrame(kind, forward = 0, right = 0, turn = 0) {
+  return submitControl({kind, a:forward + 100, b:right + 100, c:turn + 100, generation:motorGeneration, version:driveVersion});
+}
+
+// 输入：连接事件；输出：无；作用：连接建立后先读取状态，不发送非零运动目标。
+function motorOpened(event) {
+  if (event.currentTarget !== motorSocket) return;
+  clearControlQueue();
+  armReportSeq = 0;
+  socketOpenedMs = performance.now();
+  lastReportMs = socketOpenedMs;
+  lastQueryMs = socketOpenedMs;
+  setOverlayValue('motorState', '正在读取电机状态', true);
+  sendMotorFrame(0); sendArmFrame(8);
+}
+
+// 输入：紧凑状态文本；输出：无；作用：反馈与续期解耦，停车确认后才激活当前按住。
+function motorReported(event) {
+  if (event.currentTarget !== motorSocket) return;
+  let report;
+  try {
+    report = JSON.parse(event.data);
+    if (report.type === 'arm') { receiveArm(report); return; }
+    if (!Number.isInteger(report.s) || !Number.isInteger(report.g) || report.s <= 0 ||
+        report.s > socketSeq || report.s < reportSequence || report.g < 0 || report.g > 0xffffffff ||
+        !Number.isInteger(report.c) || !Number.isInteger(report.f) ||
+        ![0, 1].includes(report.e) || ![0, 1].includes(report.r) || ![0, 1].includes(report.m)) {
+      throw new Error('状态格式错误');
+    }
+  } catch (error) {
+    failMotorLink('无法解析运动状态');
+    return;
+  }
+  reportSequence = report.s;
+  lastReportMs = performance.now();
+  const state = {enabled: Boolean(report.e), ready: Boolean(report.r), moving: Boolean(report.m),
+    fault: report.f, generation: report.g};
+  if (waitSequence === -1 || (waitSequence && report.s < waitSequence)) return;
+  if (report.c !== 0 || (driveArmed && (!state.ready || state.generation !== motorGeneration))) {
+    // 业务超时、旧代次或驱动故障停止当前手势，不把仍有效的共享连接当成断网。
+    clearDrive();
+    motorGeneration = state.generation;
+    driveError = '运动已停止（结果 ' + report.c + '，故障 ' + report.f + '），请重新按下操作。';
+    updateMotorState(state);
+    return;
+  }
+  if (waitSequence) {
+    const mode = waitMode;
+    waitSequence = 0;
+    waitMode = '';
+    if (state.moving) {
+      clearDrive(); driveError = '停车尚未确认，已停止发送运动目标。';
+      updateMotorState(state); sendDriveStop(driveVersion);
+      return;
+    }
+    motorGeneration = state.generation;
+    if (mode === 'arm' && driveButton && state.ready) {
+      driveArmed = true;
+      updateMotorState(state);
+      sendDrive();
+      return;
+    }
+  }
+  if (!driveArmed) motorGeneration = state.generation;
+  updateMotorState(state);
+}
+
+// 输入：关闭事件；输出：无；作用：旧连接关闭事件不干扰新连接，当前连接关闭后不恢复运动。
+function motorClosed(event) {
+  if (event.currentTarget === motorSocket) failMotorLink('运动连接已断开');
+}
+
+// 输入：连接错误；输出：无；作用：区分连接建立失败与单次状态回报延迟。
+function motorFailed(event) {
+  if (event.currentTarget === motorSocket) failMotorLink('无法建立运动连接，请检查是否有其他控制页面');
+}
+
+// 输入：无；输出：无；作用：维护长连接并低频查询空闲状态，运动时不发送 HTTP 轮询。
+function pollMotor() {
+  if (pageLeaving) return;
+  const nowMs = performance.now();
+  if (!motorSocket) {
+    if (document.hidden || nowMs < reconnectAtMs) return;
+    motorSettings.disabled = true;
+    setOverlayValue('motorState', '正在建立运动连接', true);
+    socketSeq = 0;
+    reportSequence = 0;
+    socketOpenedMs = nowMs;
+    try {
+      motorSocket = new WebSocket(motorSocketUrl.href);
+      motorSocket.addEventListener('open', motorOpened);
+      motorSocket.addEventListener('message', motorReported);
+      motorSocket.addEventListener('close', motorClosed);
+      motorSocket.addEventListener('error', motorFailed);
+    } catch (error) {
+      failMotorLink('运动连接建立失败');
+    }
+    return;
+  }
+  if (motorSocket.readyState === WebSocket.CONNECTING) {
+    if (nowMs - socketOpenedMs > 4000) failMotorLink('运动连接建立超时');
+    return;
+  }
+  if (motorSocket.readyState !== WebSocket.OPEN) return;
+  // 反馈可以晚于单条指令；设备本身的 500 ms 无输入停车期限始终独立生效。
+  if (nowMs - lastReportMs > 2500) {
+    failMotorLink('运动状态长时间未确认');
+    return;
+  }
+  if (nowMs - lastReportMs > 1500) {
+    setOverlayValue('motorState', '状态回报延迟', true);
+  }
+  if (!driveArmed && !waitMode && nowMs - lastQueryMs >= 1000) {
+    lastQueryMs = nowMs;
+    sendMotorFrame(0);
+  }
+}
+
+// 输入：指针按下；输出：无；作用：先用常连接确认停车和新代次，再开始周期推送。
+function beginDrive(event) {
+  if (currentTab !== 'control' || motorSettings.disabled || driveButton || event.button !== 0) return;
+  event.preventDefault();
+  driveButton = event.currentTarget;
+  drivePointer = event.pointerId;
+  if (event.pointerId !== undefined) driveButton.setPointerCapture(event.pointerId);
+  driveButton.classList.add('held');
+  driveError = '';
+  driveArmed = false;
+  ++driveVersion;
+  waitMode = 'arm';
+  waitSequence = sendMotorFrame(2);
+  if (!waitSequence && driveButton) failMotorLink('运动连接尚未就绪');
+}
+
+// 输入：等待毫秒数；输出：无；作用：仅保留一个定时器，避免跳过固定时钟槽后额外等待。
+function scheduleDrive(delayMs) {
+  clearTimeout(driveTimer);
+  driveTimer = setTimeout(sendDrive, delayMs);
+}
+
+// 输入：无；输出：无；作用：每 100 ms 推送当前目标，不等待状态回报，不累计历史目标。
+function sendDrive() {
+  clearTimeout(driveTimer);
+  driveTimer = 0;
+  if (!driveButton || !driveArmed) return;
+  const speed = Number(document.getElementById('motorSpeed').value);
+  if (speed === 0) {
+    stopDrive();
+    return;
+  }
+  const data = driveButton.dataset;
+  // 斜向同时占两个平移轴，先分摊速度，使每个车轮都不超过滑块上限。
+  const level = Math.floor(speed / (Math.abs(Number(data.forward)) + Math.abs(Number(data.right)) + Math.abs(Number(data.turn))));
+  sendMotorFrame(1, data.forward * level, data.right * level, data.turn * level);
+  if (driveButton && driveArmed) scheduleDrive(DRIVE_PERIOD_MS);
+}
+
+// 输入：可选指针事件；输出：无；作用：释放当前操作，尽力发送优先停车请求。
+function stopDrive(event) {
+  if (event && event.pointerId !== undefined && event.pointerId !== drivePointer) return;
+  clearDrive();
+  setOverlayValue('motorState', '正在确认停车', !motorSocket || motorSocket.readyState !== WebSocket.OPEN);
+  waitMode = 'stop';
+  waitSequence = sendMotorFrame(2);
+  if (!waitSequence && waitMode) {
+    waitMode = '';
+    sendDriveStop(driveVersion);
+  }
+}
+
+// 输入：本地代次；输出：无；作用：仅在连接失败时尽力执行一次备用 HTTP 停车。
+async function sendDriveStop(version) {
+  try {
+    const state = JSON.parse(await request(motorUrl.href, {method: 'POST',
+      body: new URLSearchParams({forward: 0, right: 0, turn: 0}), timeout: 1500}));
+    if (version === driveVersion) {
+      if (motorSocket && motorSocket.readyState === WebSocket.OPEN) updateMotorState(state);
+      else {
+        motorSettings.disabled = true;
+        document.getElementById('motorMessage').textContent = '备用停车已确认，正在等待运动连接重建。';
+      }
+    }
+  } catch (error) {
+    // 不无限重试停车请求；失去续租后仍由板端监视任务撤销输出。
+    if (version === driveVersion) {
+      setOverlayValue('motorState', '停车未确认', true);
+      document.getElementById('motorMessage').textContent = '停车请求未确认，设备将按指令超时停车；如电机持续运行请切断电机电源。';
+    }
+  }
+}
+
+// 输入：无；输出：无；作用：切后台和窗口失焦均撤销当前按住，不恢复旧运动。
+function pauseDrive() {
+  if (driveButton) stopDrive();
+}
+
+// 输入：无；输出：无；作用：页面离开时尽力提交停车，不能依赖卸载期间的普通 XHR。
+function leaveDrive() {
+  clearControlQueue();
+  const hadDrive = Boolean(driveButton || driveArmed || waitMode);
+  if (motorSocket && motorSocket.readyState === WebSocket.OPEN && motorSocket.bufferedAmount === 0) sendMotorFrame(2);
+  pageLeaving = true;
+  clearControlQueue();
+  clearDrive();
+  const old = motorSocket;
+  motorSocket = null;
+  if (old) old.close();
+  if (hadDrive) navigator.sendBeacon(motorUrl.href, new URLSearchParams({forward: 0, right: 0, turn: 0}));
+}
+
+// 输入：无；输出：无；作用：浏览器从页面缓存恢复时只重建连接，不恢复离开前的运动。
+function resumeMotorPage() {
+  if (!pageLeaving) return;
+  pageLeaving = false;
+  reconnectAtMs = 0;
+  motorSettings.disabled = true;
+  pollMotor();
+}
+
+// 输入：无；输出：无；作用：页面隐藏才停车，恢复可见时不自动续租。
+function changeVisibility() {
+  if (document.hidden) pauseDrive();
+}
+
+// 输入：滑块事件；输出：无；作用：显示百分数，降至零时立即停止当前操作。
+function changeMotorSpeed(event) {
+  document.getElementById('motorSpeedValue').value = event.target.value + '%';
+  if (Number(event.target.value) === 0 && driveButton) stopDrive();
+}
+
+// 输入：菜单或选区事件；输出：无；作用：仅阻止按钮长按菜单和选字，输入框与说明仍可正常编辑、复制。
+function preventDriveMenu(event) {
+  const target = event.target;
+  if (target && target.closest && target.closest('button')) event.preventDefault();
+}
+document.addEventListener('contextmenu', preventDriveMenu);
+document.addEventListener('selectstart', preventDriveMenu);
+
+// 输入：捕获丢失事件；输出：无；作用：忽略已释放按钮的迟到通知，避免干扰新按下。
+function loseDrivePointer(event) {
+  if (driveButton === event.currentTarget) stopDrive(event);
+}
+
+// 输入：无；输出：无；作用：独立停车按钮不受当前活动指针编号限制。
+function pressMotorStop() {
+  stopDrive();
+}
+
+// 车辆与机械臂分别保持一个键盘方向；自动重复按键不会重启操作。
+const driveKeys = {KeyW:[1,0,0],KeyS:[-1,0,0],KeyA:[0,-1,0],KeyD:[0,1,0],
+  KeyQ:[0,0,-1],KeyE:[0,0,1],KeyZ:[1,-1,0],KeyX:[1,1,0],KeyC:[-1,-1,0],KeyV:[-1,1,0]};
+const armKeys = {KeyJ:[0,'decrease'],KeyK:[0,'increase'],KeyU:[1,'decrease'],KeyI:[1,'increase']};
+function driveKeyDown(event) {
+  if (currentTab !== 'control' || document.hidden || event.repeat || event.isComposing ||
+      event.ctrlKey || event.altKey || event.metaKey || event.target.closest('input,textarea,select,[contenteditable]')) return;
+  if (event.code === 'Space') { event.preventDefault(); stopDrive(); return; }
+  const axes = driveKeys[event.code];
+  if (axes) {
+    event.preventDefault();
+    if (motorSettings.disabled || driveButton) return;
+    const button = document.querySelector('[data-drive][data-forward="' + axes[0] + '"][data-right="' + axes[1] + '"][data-turn="' + axes[2] + '"]');
+    if (!button) return;
+    driveKey = event.code;
+    beginDrive({currentTarget:button,button:0,preventDefault:preventKeyDefault});
+    return;
+  }
+  const joint = armKeys[event.code];
+  if (!joint) return;
+  event.preventDefault();
+  if (armBusy || armStepButton || !armSnapshot || !armSnapshot.ready) return;
+  const button = document.querySelector('[data-arm-step="' + joint[1] + '"][data-arm-joint="' + joint[0] + '"]');
+  if (!button) return;
+  beginArmStep({currentTarget:button,button:0,preventDefault:preventKeyDefault});
+  if (armStepButton === button) armKey = event.code;
+}
+function preventKeyDefault() {}
+function driveKeyUp(event) {
+  // 松开动作不受当前焦点影响，避免按下后焦点改变造成持续运动。
+  if (event.code === driveKey) { event.preventDefault(); stopDrive(); }
+  if (event.code === armKey) { event.preventDefault(); stopArmStep(); }
+}
+
+// 输入：聚焦事件；输出：无；作用：进入文本或数值编辑时结束已有键盘操作。
+function stopTypingControls(event) {
+  if (!event.target.closest('input,textarea,select,[contenteditable]')) return;
+  if (driveKey) stopDrive();
+  if (armKey) stopArmStep();
+}
+document.addEventListener('keydown', driveKeyDown);
+document.addEventListener('keyup', driveKeyUp);
+document.addEventListener('focusin', stopTypingControls);
+
+// 输入：目标标签按钮；输出：无；作用：只切换面板显示，切换前撤销当前操作，保留相机和连接。
+function activateTab(button) {
+  const next = button.id === 'tabControl' ? 'control' : 'image';
+  if (next !== currentTab) { pauseDrive(); stopArmStep(); currentTab = next; }
+  const control = document.getElementById('tabControl');
+  const image = document.getElementById('tabImage');
+  control.setAttribute('aria-selected', String(currentTab === 'control'));
+  image.setAttribute('aria-selected', String(currentTab === 'image'));
+  control.tabIndex = currentTab === 'control' ? 0 : -1;
+  image.tabIndex = currentTab === 'image' ? 0 : -1;
+  const controlPanel = document.getElementById('controlPanel');
+  const imagePanel = document.getElementById('imagePanel');
+  controlPanel.hidden = controlPanel.inert = currentTab !== 'control';
+  imagePanel.hidden = imagePanel.inert = currentTab !== 'image';
+  controlPanel.setAttribute('aria-hidden', String(currentTab !== 'control'));
+  imagePanel.setAttribute('aria-hidden', String(currentTab !== 'image'));
+}
+function selectTab(event) { activateTab(event.currentTarget); }
+function tabKeyDown(event) {
+  if (event.code === 'Space' || event.code === 'Enter') {
+    event.preventDefault(); event.stopPropagation();
+    pauseDrive(); stopArmStep(); activateTab(event.currentTarget);
+    return;
+  }
+  let id;
+  if (event.code === 'Home') id = 'tabControl';
+  else if (event.code === 'End') id = 'tabImage';
+  else if (event.code === 'ArrowLeft' || event.code === 'ArrowRight') id = currentTab === 'control' ? 'tabImage' : 'tabControl';
+  else return;
+  event.preventDefault();
+  const button = document.getElementById(id); activateTab(button); button.focus();
+}
+for (const button of document.querySelectorAll('[role="tab"]')) {
+  button.addEventListener('click', selectTab);
+  button.addEventListener('keydown', tabKeyDown);
+}
+
+for (const button of document.querySelectorAll('[data-drive]')) {
+  button.addEventListener('pointerdown', beginDrive);
+  button.addEventListener('lostpointercapture', loseDrivePointer);
+}
+document.addEventListener('pointerup', stopDrivePointer);
+document.addEventListener('pointercancel', stopDrivePointer);
+// 输入：指针释放事件；输出：无；作用：普通页面点击不发送额外停车请求。
+function stopDrivePointer(event) {
+  if (driveButton) stopDrive(event);
+}
+document.getElementById('motorStop').addEventListener('click', pressMotorStop);
+document.getElementById('motorSpeed').addEventListener('input', changeMotorSpeed);
+window.addEventListener('blur', pauseDrive);
+window.addEventListener('pagehide', leaveDrive);
+window.addEventListener('pageshow', resumeMotorPage);
+document.addEventListener('visibilitychange', changeVisibility);
+pollMotor();
+setInterval(pollMotor, 250);
+
+for (const control of controls) {
+  control.addEventListener('input', updateValue);
+  control.addEventListener('change', changeSetting);
+}
+document.getElementById('exposureSlider').addEventListener('input', updateValue);
+document.getElementById('exposureSlider').addEventListener('change', changeSetting);
+startButton.addEventListener('click', startPreview);
+stopButton.addEventListener('click', stopPreview);
+video.addEventListener('error', streamFailed);
+pollStatus();
+setInterval(pollStatus, 2000);
+// 输入：机械臂快照；输出：无；作用：区分目标与最后下发角度，不宣称实际位置。
+function updateArm(state) {
+  armSnapshot = state;
+  armSettings.disabled = armBusy || !state.enabled || !state.ready || !motorSocket || motorSocket.readyState !== WebSocket.OPEN;
+  setOverlayValue('armState', !state.enabled ? '未启用' : !state.ready ? '不可用' : state.slewing.some(Boolean) ? '平滑运动中' : '可操作');
+  for (let joint = 0; joint < 2; joint += 1) {
+    const input = document.getElementById('armAngle' + joint);
+    input.min = state.minimum[joint]; input.max = state.maximum[joint];
+    document.getElementById('armLimits' + joint).textContent = '软件范围 ' + input.min + '°～' + input.max + '°';
+    document.getElementById('armTarget' + joint).textContent = state.angles[joint] < 0 ? '未给定目标' :
+      '最后下发 ' + state.angles[joint] + '° / 目标 ' + state.targets[joint] + '° · ' + (state.holding[joint] ? '保持输出' : '已释放');
+  }
+}
+
+// 输入：动作、关节和数值；输出：序号或等待标记；作用：短暂繁忙时保留最新目标，保持／释放优先。
+function sendArmFrame(kind, joint = 0, value = 0) {
+  return submitControl({kind, a:joint, b:value, c:0, generation:armSnapshot ? armSnapshot.generation : 0, version:armStepEpoch});
+}
+
+// 输入：长连接回报；输出：无；作用：验证状态、过滤停止前的迟到回报，并更新机械臂界面。
+function receiveArm(report) {
+  const arrays = ['angles', 'targets', 'minimum', 'maximum', 'holding', 'slewing'];
+  if (!Number.isInteger(report.s) || report.s <= 0 || report.s > socketSeq || report.s < armReportSeq ||
+      !Number.isInteger(report.generation) || report.generation < 0 || report.generation > 0xffffffff ||
+      !Number.isInteger(report.c) || !Number.isInteger(report.fault) || typeof report.enabled !== 'boolean' || typeof report.ready !== 'boolean' ||
+      arrays.some(invalidArmArray, report)) { loseArmLink('机械臂状态格式错误'); return; }
+  for (let joint = 0; joint < 2; joint += 1) {
+    if (!Number.isInteger(report.angles[joint]) || report.angles[joint] < -1 || report.angles[joint] > 180 ||
+        !Number.isInteger(report.targets[joint]) || report.targets[joint] < -1 || report.targets[joint] > 180 ||
+        !Number.isInteger(report.minimum[joint]) || !Number.isInteger(report.maximum[joint]) ||
+        report.minimum[joint] < 0 || report.maximum[joint] > 180 || report.minimum[joint] > report.maximum[joint] ||
+        typeof report.holding[joint] !== 'boolean' || typeof report.slewing[joint] !== 'boolean') {
+      loseArmLink('机械臂角度状态无效'); return;
+    }
+  }
+  armReportSeq = report.s; armAckMs = performance.now(); lastReportMs = armAckMs;
+  if (armPendingSeq === -1 || (armPendingSeq && report.s < armPendingSeq)) return;
+  const confirmed = Boolean(armPendingSeq);
+  if (confirmed) { armPendingSeq = 0; armBusy = false; }
+  if (armStepButton && armSnapshot && report.generation !== armSnapshot.generation) {
+    // 服务端租约到期后必须重新按下，不能用新代次自动恢复旧手势。
+    stopArmStep(false);
+    updateArm(report);
+    document.getElementById('armMessage').textContent = '机械臂已停止推进，请重新按下操作。';
+    return;
+  }
+  updateArm(report);
+  if (report.c !== 0) {
+    stopArmStep();
+    document.getElementById('armMessage').textContent = '机械臂指令被拒绝（结果 ' + report.c + '，故障 ' + report.fault + '），未自动重发。';
+    return;
+  }
+  if (!report.enabled || !report.ready) {
+    stopArmStep(false);
+    document.getElementById('armMessage').textContent = !report.enabled ? '当前固件关闭机械臂。' : '机械臂不可用，故障 ' + report.fault + '。';
+    return;
+  }
+  if (armStepButton) {
+    const joint = Number(armStepButton.dataset.armJoint);
+    const limit = armStepButton.dataset.armStep === 'increase' ? report.maximum[joint] : report.minimum[joint];
+    if (report.angles[joint] === limit) {
+      stopArmStep();
+      document.getElementById('armMessage').textContent = '已达到软件限位，停止角度推进。';
+    }
+  } else if (confirmed) document.getElementById('armMessage').textContent = '指令已确认；显示为目标和下发角度，没有实际位置反馈。';
+}
+
+// 输入：字段名；输出：数组是否缺失；作用：为状态校验提供具名回调。
+function invalidArmArray(name) { return !Array.isArray(this[name]) || this[name].length !== 2; }
+
+// 输入：错误说明；输出：无；作用：断流不恢复旧操作，设备在短租约到期后停止推进。
+function loseArmLink(message) {
+  stopArmStep(false);
+  if (queuedArmAction && queuedArmAction.kind === 6) queuedArmAction = null;
+  armPendingSeq = 0; armBusy = false; armSnapshot = null;
+  armSettings.disabled = true;
+  setOverlayValue('armState', '状态未知', true);
+  document.getElementById('armMessage').textContent = message + '；未自动恢复动作。';
+}
+
+// 输入：无；输出：无；作用：空闲时只通过现有长连接读取状态，不创建额外 HTTP 会话。
+function pollArm() {
+  if (document.hidden || pageLeaving || !motorSocket || motorSocket.readyState !== WebSocket.OPEN) return;
+  if (armBusy) {
+    if (performance.now() - armPendingAt > 1500) {
+      sendArmFrame(5); loseArmLink('机械臂指令结果超时');
+    }
+    return;
+  }
+  if (armStepButton || performance.now() - armQueryMs < 1000) return;
+  armQueryMs = performance.now(); sendArmFrame(8);
+}
+
+// 输入：目标或释放按钮；输出：无；作用：指令经持续连接提交一次，结果未知时不重放。
+function commandArm(event) {
+  if (armBusy || !armSnapshot || !armSnapshot.ready) return;
+  const release = event.currentTarget.id === 'armRelease';
+  const joint = release ? 0 : Number(event.currentTarget.dataset.armJoint);
+  const input = document.getElementById('armAngle' + joint);
+  const angle = release ? 0 : Number(input.value);
+  if (!release && (input.value.trim() === '' || !Number.isInteger(angle) || angle < armSnapshot.minimum[joint] || angle > armSnapshot.maximum[joint])) {
+    document.getElementById('armMessage').textContent = '目标超出软件范围，未发送。'; return;
+  }
+  stopArmStep(false);
+  const sequence = sendArmFrame(release ? 7 : 6, joint, angle);
+  if (!sequence) { loseArmLink('控制连接忙或未就绪'); return; }
+  armPendingSeq = sequence; armPendingAt = performance.now(); armBusy = true; armSettings.disabled = true;
+  document.getElementById('armMessage').textContent = release ? '正在释放输出，请注意承重机械臂。' : '正在提交平滑目标…';
+}
+
+// 输入：是否通知设备；输出：无；作用：松手提交保持命令，旧回报不能恢复按住。
+function stopArmStep(notify = true) {
+  const wasHeld = Boolean(armStepButton);
+  armStepButton = null; armStepPointer = null; clearTimeout(armStepTimer); armStepTimer = 0;
+  armKey = '';
+  ++armStepEpoch; queuedArm = null;
+  if (wasHeld && notify && !pageLeaving) {
+    const sequence = sendArmFrame(5);
+    if (sequence) { armPendingSeq = sequence; armPendingAt = performance.now(); armBusy = true; armSettings.disabled = true; }
+    else if (motorSocket) failMotorLink('机械臂停止请求未能发送');
+  }
+}
+
+// 输入：无；输出：无；作用：每 100 ms 更新一次平滑目标，不等待每一步的响应。
+function repeatArmStep() {
+  armStepTimer = 0;
+  if (!armStepButton || document.hidden || pageLeaving) return;
+  if (performance.now() - armAckMs > 500) { stopArmStep(); return; }
+  const joint = Number(armStepButton.dataset.armJoint);
+  const sequence = sendArmFrame(armStepButton.dataset.armStep === 'increase' ? 3 : 4, joint, 15);
+  if (!sequence) { stopArmStep(); return; }
+  armStepTimer = setTimeout(repeatArmStep, 100);
+}
+
+// 输入：指针按下；输出：无；作用：从已设置的角度开始，首次未知角度不自动回中。
+function beginArmStep(event) {
+  if (currentTab !== 'control' || event.button !== 0 || armBusy || armStepButton || !armSnapshot || !armSnapshot.ready) return;
+  event.preventDefault();
+  const joint = Number(event.currentTarget.dataset.armJoint);
+  if (armSnapshot.angles[joint] < 0 || !armSnapshot.holding[joint]) {
+    document.getElementById('armMessage').textContent = '请先发送该关节的初始目标角度。'; return;
+  }
+  armStepButton = event.currentTarget; armStepPointer = event.pointerId; armAckMs = performance.now();
+  if (event.pointerId !== undefined) armStepButton.setPointerCapture(event.pointerId);
+  repeatArmStep();
+}
+
+// 输入：释放事件；输出：无；作用：其他指针或旧捕获回调不能结束新关节操作。
+function endArmStep(event) {
+  if (event && event.type === 'lostpointercapture' && event.currentTarget !== armStepButton) return;
+  if (event && event.pointerId !== undefined && event.pointerId !== armStepPointer) return;
+  stopArmStep();
+}
+function hideArmStep() { if (document.hidden) stopArmStep(); }
+for (const button of document.querySelectorAll('[data-arm-joint]:not([data-arm-step])')) button.addEventListener('click', commandArm);
+for (const button of document.querySelectorAll('[data-arm-step]')) {
+  button.addEventListener('pointerdown', beginArmStep);
+  button.addEventListener('lostpointercapture', endArmStep);
+}
+document.addEventListener('pointerup', endArmStep);
+document.addEventListener('pointercancel', endArmStep);
+window.addEventListener('blur', endArmStep);
+window.addEventListener('pagehide', endArmStep);
+document.addEventListener('visibilitychange', hideArmStep);
+document.getElementById('armRelease').addEventListener('click', commandArm);
+setInterval(pollArm, 250);
+
+// 输入：确认后的开关状态；输出：无；作用：按钮只显示设备已确认的软件输出状态。
+function updateLed(state) {
+  const button = document.getElementById('ledToggle');
+  if (!state || !state.led_ready || typeof state.led_on !== 'boolean') {
+    ledKnown = null; button.disabled = true; button.textContent = '补光灯状态未知'; button.setAttribute('aria-pressed', 'false'); return;
+  }
+  ledKnown = state.led_on; button.disabled = ledBusy;
+  button.textContent = ledKnown ? '关闭补光灯' : '打开补光灯';
+  button.setAttribute('aria-pressed', String(ledKnown));
+}
+
+// 输入：点击；输出：无；作用：按绝对开关值设置，不乐观翻转，也不自动重试未知结果。
+async function toggleLed() {
+  if (ledBusy || ledKnown === null) return;
+  ledBusy = true; ++ledVersion;
+  const button = document.getElementById('ledToggle'); button.disabled = true;
+  try {
+    const state = JSON.parse(await request('/led', {method:'POST',body:new URLSearchParams({enabled:ledKnown ? 0 : 1}),timeout:1500}));
+    ledBusy = false; updateLed(state);
+  } catch (error) {
+    ledBusy = false; updateLed(null); showMessage('补光灯指令结果未确认，等待重新读取状态。' + error.message, true);
+  }
+}
+document.getElementById('ledToggle').addEventListener('click', toggleLed);
+
+</script>
+</body>
+</html>

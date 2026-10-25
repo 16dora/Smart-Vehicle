@@ -1,0 +1,23 @@
+[Unit]
+Description=Smart Vehicle Cloud Control
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smart-vehicle
+Group=smart-vehicle
+EnvironmentFile=/etc/smart-vehicle/cloud.env
+ExecStart=/opt/smart-vehicle/bin/smart_vehicle_cloud
+WorkingDirectory=/var/lib/smart-vehicle
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/smart-vehicle
+
+[Install]
+WantedBy=multi-user.target

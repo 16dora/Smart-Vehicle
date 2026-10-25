@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "linux-debug",
+      "displayName": "Ubuntu SSH Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "CMAKE_CXX_STANDARD": "20"},
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux"},
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {"hostOS": ["Linux"]},
+        "microsoft.com/VisualStudioRemoteSettings/CMake/1.0": {
+          "sourceDir": "$env{HOME}/smart-vehicle-cloud/src",
+          "copySources": true,
+          "copySourcesOptions": {"exclusionList": [".git", ".vs", "build", ".local"]}
+        }
+      }
+    },
+    {"name": "linux-release", "inherits": "linux-debug", "binaryDir": "${sourceDir}/build/release", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}}
+  ],
+  "buildPresets": [
+    {"name": "linux-debug", "configurePreset": "linux-debug", "jobs": 2},
+    {"name": "linux-release", "configurePreset": "linux-release", "jobs": 2}
+  ]
+}
