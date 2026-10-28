@@ -48,6 +48,10 @@ private:
     esp_err_t setLed(httpd_req_t* req);
     // 输入：已初始化的 OV2640；输出：设置结果；作用：分辨率变化后恢复低外部时钟的内部倍频。
     esp_err_t applySensorClock(sensor_t* sensor);
+    // 输入：相机帧；输出：结构是否有效；作用：校验原生 JPEG 表、分量和扫描边界。
+    static bool isValidJpeg(const camera_fb_t* frame);
+    // 输入：无；输出：恢复结果；作用：保留当前图像参数重新设置传感器。
+    esp_err_t recoverCamera();
     // 输入：无；输出：初始化结果；作用：同时启动本地 AP 和路由器 STA 接口。
     esp_err_t initWifi();
     // 输入：无；输出：启动结果；作用：分离网页、视频和运动三个服务任务。
@@ -219,7 +223,7 @@ private:
     // 每次停止请求或断网递增，旧视频循环发现变化后退出。
     std::atomic<unsigned> m_epoch{0};
     // 视频发送上限，单位帧每秒；受 m_mutex 保护。
-    int m_maxFps = 10;
+    int m_maxFps = 30;
     // 最近统计窗口的发送帧率，单位帧每秒；受 m_mutex 保护。
     double m_actualFps = 0;
     // 当前分辨率的网页选项编号，显式映射到驱动枚举。
@@ -228,4 +232,6 @@ private:
     int m_frameCount = CONFIG_CAMERA_FRAME_BUFFERS;
     // 当前是否正在传输视频；受 m_mutex 保护。
     bool m_streaming = false;
+    // 累计被拒绝的损坏 JPEG 数；抓拍和视频任务并发更新，运行状态按快照读取。
+    std::atomic<uint32_t> m_jpegErrors{0};
 };

@@ -7,6 +7,7 @@
 - `02CameraWebServer/`：AI-Thinker ESP32-CAM 摄像头网页、MJPEG 预览、图像设置及 PCA9685＋TB6612FNG 四轮控制。
 - `03CameraApSta/`：复制 02 功能并同时开启热点与路由器连接，热点密码为 `123456789`。
 - `04RemoteVehicle/`：云端登录与远程控制；`cloud_server/` 为 Ubuntu C++/Drogon CMake 工程，`vehicle_firmware/` 为独立 ESP-IDF 固件。
+- `05CameraS3ApSta/`：ESP32-S3-N16R8＋OV3660，保留当前 03 的 AP＋STA、网页、OLED、车轮和机械臂功能，按旧 2×8 母座孔位适配。
 
 后续工程沿用编号加功能名称的目录形式，例如 `03GpioTest/`。
 每个工程分别维护 `CMakeLists.txt`、`source/`、`include/`、

@@ -51,7 +51,7 @@ menu "Camera Web Server"
     config CAMERA_DVP_DIV
         int "OV2640 pixel clock divider up to SVGA"
         range 2 12
-        default 4
+        default 2
         help
             Manual DVP pixel clock divider. Larger resolutions retain at least 12.
 

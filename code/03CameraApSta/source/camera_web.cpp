@@ -276,6 +276,138 @@ esp_err_t CameraWeb::applySensorClock(sensor_t* sensor)
     return dvpResult == 0 ? ESP_OK : ESP_FAIL;
 }
 
+// 输入：驱动持有的 JPEG 帧；输出：头结构和扫描边界是否一致；作用：阻止损坏图像进入浏览器解码器。
+bool CameraWeb::isValidJpeg(const camera_fb_t* frame)
+{
+    if (frame == nullptr || frame->buf == nullptr || frame->format != PIXFORMAT_JPEG || frame->len < 4 ||
+        frame->buf[0] != 0xff || frame->buf[1] != 0xd8 ||
+        frame->buf[frame->len - 2] != 0xff || frame->buf[frame->len - 1] != 0xd9)
+    {
+        // 先检查最小边界，后续偏移读取才能安全访问帧缓冲。
+        return false;
+    }
+    const uint8_t* data = frame->buf;
+    std::array<uint8_t, 4> components{};
+    unsigned count = 0;
+    unsigned quantTables = 0;
+    unsigned huffTables = 0;
+    size_t offset = 2;
+    while (offset + 4 <= frame->len)
+    {
+        // 头段必须以标记开始；任何长度越界都视为采集内容损坏。
+        if (data[offset++] != 0xff) return false;
+        while (offset < frame->len && data[offset] == 0xff) ++offset;
+        if (offset + 3 > frame->len) return false;
+        const uint8_t marker = data[offset++];
+        const size_t length = (size_t(data[offset]) << 8) | data[offset + 1];
+        if (length < 2 || length > frame->len - offset) return false;
+        if (marker == 0xdb)
+        {
+            // OV2640 使用八位量化表；检查每张表的完整长度和编号。
+            size_t table = offset + 2;
+            while (table < offset + length)
+            {
+                const uint8_t selector = data[table];
+                if (selector > 3 || offset + length - table < 65) return false;
+                quantTables |= 1U << selector;
+                table += 65;
+            }
+        }
+        else if (marker == 0xc4)
+        {
+            // Huffman 表的符号数量决定段内长度，不能仅信任外层 JPEG 首尾。
+            size_t table = offset + 2;
+            while (table < offset + length)
+            {
+                if (offset + length - table < 17) return false;
+                const uint8_t selector = data[table++];
+                if ((selector >> 4) > 1 || (selector & 0x0f) > 3) return false;
+                unsigned symbols = 0;
+                for (unsigned index = 0; index < 16; ++index) symbols += data[table++];
+                if (symbols == 0 || symbols > 256 || symbols > offset + length - table) return false;
+                huffTables |= 1U << (((selector >> 4) * 4) + (selector & 0x0f));
+                table += symbols;
+            }
+        }
+        else if (marker == 0xc0)
+        {
+            // 原生基线 JPEG 的分量编号必须唯一，宽高必须与驱动帧描述一致。
+            if (length < 8 || data[offset + 2] != 8) return false;
+            count = data[offset + 7];
+            const unsigned height = (unsigned(data[offset + 3]) << 8) | data[offset + 4];
+            const unsigned width = (unsigned(data[offset + 5]) << 8) | data[offset + 6];
+            if (count == 0 || count > components.size() || length != 8 + count * 3 ||
+                width != frame->width || height != frame->height) return false;
+            for (unsigned index = 0; index < count; ++index)
+            {
+                const size_t item = offset + 8 + index * 3;
+                components[index] = data[item];
+                const uint8_t quant = data[item + 2];
+                if (quant > 3 || (quantTables & (1U << quant)) == 0) return false;
+                for (unsigned old = 0; old < index; ++old)
+                {
+                    if (components[old] == components[index]) return false;
+                }
+            }
+        }
+        else if (marker == 0xda)
+        {
+            // SOS 必须引用 SOF 中真实存在的分量；该检查可识别此前丢字节的扫描头。
+            if (count == 0 || length != 6 + count * 2 || data[offset + 2] != count) return false;
+            unsigned selected = 0;
+            for (unsigned index = 0; index < count; ++index)
+            {
+                const uint8_t component = data[offset + 3 + index * 2];
+                const uint8_t huff = data[offset + 4 + index * 2];
+                if ((huff >> 4) > 3 || (huff & 0x0f) > 3 ||
+                    (huffTables & (1U << (huff >> 4))) == 0 ||
+                    (huffTables & (1U << (4 + (huff & 0x0f)))) == 0) return false;
+                unsigned found = count;
+                for (unsigned old = 0; old < count; ++old)
+                {
+                    if (components[old] == component) found = old;
+                }
+                if (found == count || (selected & (1U << found)) != 0) return false;
+                selected |= 1U << found;
+            }
+            if (data[offset + length - 3] != 0 || data[offset + length - 2] != 63 ||
+                data[offset + length - 1] != 0) return false;
+            offset += length;
+            while (offset + 1 < frame->len)
+            {
+                // 压缩数据中的 0xff 必须转义或构成重启标记，最后才允许 EOI。
+                const void* found = std::memchr(data + offset, 0xff, frame->len - offset);
+                if (found == nullptr) return false;
+                offset = static_cast<const uint8_t*>(found) - data;
+                if (offset + 1 >= frame->len) return false;
+                const uint8_t next = data[offset + 1];
+                if (next == 0xd9) return offset + 2 == frame->len;
+                if (next != 0 && (next < 0xd0 || next > 0xd7)) return false;
+                offset += 2;
+            }
+            return false;
+        }
+        offset += length;
+    }
+    return false;
+}
+
+// 输入：无；输出：恢复结果；作用：在相机锁内重新应用分辨率及曝光，恢复异常的 JPEG 编码状态。
+esp_err_t CameraWeb::recoverCamera()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    ESP_LOGI(TAG, "recoverCamera() >> size=%d", m_size);
+    const bool applied = applySetting("size", m_size);
+    if (!applied)
+    {
+        ESP_LOGE(TAG, "recoverCamera() << result=REAPPLY_FAILED");
+        return ESP_FAIL;
+    }
+    cacheStatus();
+    ESP_LOGI(TAG, "recoverCamera() << result=OK");
+    return ESP_OK;
+}
+
 esp_err_t CameraWeb::initWifi()
 {
     ESP_LOGI(TAG, "initWifi() >> mode=APSTA ap_ssid=%s", CONFIG_CAMERA_AP_SSID);
@@ -781,8 +913,25 @@ esp_err_t CameraWeb::onRequest(httpd_req_t* req)
         {
             std::lock_guard<std::mutex> lock(app->m_mutex);
             lockUs = esp_timer_get_time() - started;
-            ESP_LOGI(TAG, "capture esp_camera_fb_get() >>");
-            frame = esp_camera_fb_get();
+            // 最多清理两个旧缓冲并重试；连续损坏时重新应用当前传感器配置。
+            for (unsigned attempt = 0; attempt < 5; ++attempt)
+            {
+                ESP_LOGI(TAG, "capture esp_camera_fb_get() >> attempt=%u", attempt);
+                frame = esp_camera_fb_get();
+                ESP_LOGI(TAG, "capture esp_camera_fb_get() << present=%d", int(frame != nullptr));
+                if (frame == nullptr || isValidJpeg(frame)) break;
+                app->m_jpegErrors.fetch_add(1);
+                ESP_LOGW(TAG, "capture JPEG rejected bytes=%u", unsigned(frame->len));
+                ESP_LOGI(TAG, "capture esp_camera_fb_return() >>");
+                esp_camera_fb_return(frame);
+                ESP_LOGI(TAG, "capture esp_camera_fb_return() <<");
+                frame = nullptr;
+                if (attempt == 1 && !app->applySetting("size", app->m_size))
+                {
+                    // 重新设置失败立即返回错误，不能继续发送无法解码的内容。
+                    break;
+                }
+            }
         }
         const int64_t gotFrame = esp_timer_get_time();
         // 帧缓冲由驱动拥有，使用 RAII 保证发送失败时也归还。
@@ -896,10 +1045,13 @@ esp_err_t CameraWeb::sendPerf(httpd_req_t* req)
         {
             // 测试频点均在 OV2640 外部时钟范围内，每次只改变一个参数。
             const int hz = std::atoi(frequency);
-            ESP_LOGI(TAG, "ledc_set_freq() >> hz=%d", hz);
-            result = hz == 8000000 || hz == 10000000 || hz == 16000000 || hz == 20000000 ?
-                ledc_set_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0, hz) : ESP_ERR_INVALID_ARG;
-            ESP_LOGI(TAG, "ledc_set_freq() << result=%s actual_hz=%u", esp_err_to_name(result),
+            // 驱动同步保存时钟值，避免测量换频后曝光换算仍使用旧频率。
+            ESP_LOGI(TAG, "sensor set_xclk() >> timer=0 hz=%d", hz);
+            result = hz == 8000000 || hz == 10000000 || hz == 11000000 || hz == 12000000 ||
+                hz == 16000000 || hz == 20000000 ?
+                esp_camera_sensor_get()->set_xclk(esp_camera_sensor_get(), LEDC_TIMER_0, hz / 1000000) :
+                ESP_ERR_INVALID_ARG;
+            ESP_LOGI(TAG, "sensor set_xclk() << result=%s actual_hz=%u", esp_err_to_name(result),
                      unsigned(ledc_get_freq(LEDC_LOW_SPEED_MODE, LEDC_TIMER_0)));
         }
         if (result == ESP_OK && esp_camera_sensor_get() != nullptr && drive[0] != '\0')
@@ -1590,11 +1742,11 @@ void CameraWeb::updateRuntime()
             "{\"cpu_valid\":%s,\"cpu_mhz\":%u,\"cpu0_pct\":%.1f,\"cpu1_pct\":%.1f,"
             "\"internal_free\":%u,\"psram_free\":%u,\"wifi_mode\":\"%s\",\"rssi_source\":\"%s\",\"rssi_valid\":%s,"
             "\"rssi_dbm\":%d,\"ap_clients\":%d,\"video_Bps\":%.1f,\"frames\":%llu,"
-            "\"capture_ms\":%.3f,\"send_ms\":%.3f,\"window_ms\":%lld}",
+            "\"capture_ms\":%.3f,\"send_ms\":%.3f,\"window_ms\":%lld,\"jpeg_errors\":%u}",
             isCpuValid ? "true" : "false", cpuMhz, busyPct[0], busyPct[1],
             unsigned(internalFree), unsigned(psramFree), wifiMode, rssiSource, isRssiValid ? "true" : "false",
             rssiDbm, apClients, bytesPerSec, static_cast<unsigned long long>(frames),
-            captureMs, sendMs, static_cast<long long>(elapsedUs / 1000));
+            captureMs, sendMs, static_cast<long long>(elapsedUs / 1000), unsigned(m_jpegErrors.load()));
     }
 #if CONFIG_CAMERA_OLED_ENABLED
     // 无网页访问、无视频时也主动采样曝光；相机忙则沿用快照，不等待取帧。
@@ -2160,6 +2312,9 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
     unsigned frames = 0;
     // 记录本次连接完整发出的帧数，区分首帧失败和持续传输后的失败。
     unsigned totalFrames = 0;
+    // 单连接内最多恢复两次，避免持续硬件故障导致无限重试。
+    unsigned badFrames = 0;
+    unsigned recoveries = 0;
     int64_t window = 0;
     int64_t nextFrame = esp_timer_get_time();
     esp_err_t result = ESP_OK;
@@ -2212,6 +2367,25 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             result = ESP_FAIL;
             break;
         }
+        if (!isValidJpeg(frame))
+        {
+            app->m_jpegErrors.fetch_add(1);
+            ESP_LOGW(TAG, "stream JPEG rejected bytes=%u consecutive=%u", unsigned(frame->len), badFrames + 1);
+            holder.reset();
+            if (++badFrames >= 3)
+            {
+                // 先归还驱动帧再设置寄存器，避免恢复时占住旧帧缓冲。
+                if (recoveries >= 2 || app->recoverCamera() != ESP_OK)
+                {
+                    result = ESP_FAIL;
+                    break;
+                }
+                ++recoveries;
+                badFrames = 0;
+            }
+            continue;
+        }
+        badFrames = 0;
         if (totalFrames == 0)
         {
             // 首帧记录尺寸和 JPEG 起始标志，后续正常帧不逐帧刷屏。
