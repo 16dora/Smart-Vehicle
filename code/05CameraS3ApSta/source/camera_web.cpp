@@ -77,7 +77,7 @@ esp_err_t CameraWeb::start()
     const esp_err_t ledResult = initLed();
     if (ledResult != ESP_OK) ESP_LOGW(TAG, "Flash LED unavailable result=%s", esp_err_to_name(ledResult));
 #if CONFIG_CAMERA_OLED_ENABLED
-    // 控制台已由 ESP-IDF 配置为空设备，初始化 SPI 后 UART0 不再输出业务日志。
+    // OLED 独占 I2C0；UART0 保留启动日志，相机稍后独立初始化 I2C1。
     const esp_err_t oledResult = m_display.start();
     if (oledResult != ESP_OK)
     {
@@ -136,7 +136,7 @@ esp_err_t CameraWeb::initLed()
         ESP_LOGI(TAG, "rmt_enable() >> gpio=%d", int(board::RGB_LED));
         result = rmt_enable(m_ledChannel);
         ESP_LOGI(TAG, "rmt_enable() << result=%s", esp_err_to_name(result));
-        if (result == ESP_OK) result = writeLed(false);
+        if (result == ESP_OK) result = writeLed(false, m_ledBrightness.load());
     }
     // 无 ACK 的灯光接口只能确认指令发送，不能检测灯珠是否在线或实际发光。
     m_ledFault.store(result);
@@ -147,16 +147,23 @@ esp_err_t CameraWeb::initLed()
     return result;
 }
 
-// 输入：开关；输出：RMT 结果；作用：白色使用低亮度 32/255，关闭时三个颜色均为零。
-esp_err_t CameraWeb::writeLed(bool enabled)
+// 输入：开关与亮度百分数；输出：RMT 结果；作用：将白光强度映射到三个 8 位通道。
+esp_err_t CameraWeb::writeLed(bool enabled, int brightness)
 {
-    ESP_LOGI(TAG, "writeLed() >> enabled=%d gpio=%d", int(enabled), int(board::RGB_LED));
+    ESP_LOGI(TAG, "writeLed() >> enabled=%d brightness=%d gpio=%d", int(enabled), brightness, int(board::RGB_LED));
+    if (brightness < 0 || brightness > 100)
+    {
+        // 所有输出先校验百分数，不能将越界值截断为另一种发光强度。
+        ESP_LOGW(TAG, "writeLed() << result=INVALID_BRIGHTNESS");
+        return ESP_ERR_INVALID_ARG;
+    }
     if (m_ledChannel == nullptr || m_ledEncoder == nullptr)
     {
         ESP_LOGW(TAG, "writeLed() << result=NOT_INITIALIZED");
         return ESP_ERR_INVALID_STATE;
     }
-    const uint8_t value = enabled ? 32 : 0;
+    // 关灯保留预设但输出全零；百分数按最近整数映射到 0～255，0% 即不发光。
+    const uint8_t value = enabled ? static_cast<uint8_t>((brightness * 255 + 50) / 100) : 0;
     // 三个颜色值相同，GRB/RGB 顺序均为白色；每位 1.2 us，末尾锁存低电平 100 us。
     for (size_t index = 0; index < 24; ++index)
     {
@@ -186,7 +193,8 @@ esp_err_t CameraWeb::writeLed(bool enabled)
     return result;
 }
 
-// 输入：enabled=0 或 enabled=1；输出：确认后的开关状态；作用：幂等设置，失败不自动反向重试。
+// 输入：enabled=0/1、brightness=0～100，可单独或同时提供；输出：确认后的开关及亮度预设。
+// 作用：绝对值设置，关灯时可调预设；不重试未知结果，不因调亮度隐式开灯。
 esp_err_t CameraWeb::setLed(httpd_req_t* req)
 {
     ESP_LOGI(TAG, "setLed() >> bytes=%u", unsigned(req->content_len));
@@ -195,44 +203,79 @@ esp_err_t CameraWeb::setLed(httpd_req_t* req)
         ESP_LOGW(TAG, "setLed() << result=ORIGIN_REJECTED");
         return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "Use the device webpage");
     }
-    char body[16] = {};
+    char body[48] = {};
     size_t offset = 0;
     esp_err_t result = ESP_OK;
     if (req->content_len == 0 || req->content_len >= sizeof(body)) result = ESP_ERR_INVALID_ARG;
     while (result == ESP_OK && offset < req->content_len)
     {
-        // 收齐表单才允许改变输出；超时或不完整请求保持原开关。
+        // 收齐表单后才解析全部字段；不完整或非法请求不会先改变部分输出。
         ESP_LOGI(TAG, "httpd_req_recv() >> remaining=%u", unsigned(req->content_len - offset));
         const int count = httpd_req_recv(req, body + offset, req->content_len - offset);
         ESP_LOGI(TAG, "httpd_req_recv() << count=%d", count);
         if (count <= 0) result = ESP_ERR_INVALID_ARG;
         else offset += size_t(count);
     }
-    if (result == ESP_OK && std::strcmp(body, "enabled=0") != 0 && std::strcmp(body, "enabled=1") != 0)
-        result = ESP_ERR_INVALID_ARG;
-    if (result == ESP_ERR_INVALID_ARG)
+    bool enabled = m_ledOn.load();
+    int brightness = m_ledBrightness.load();
+    char onText[4] = {};
+    char levelText[8] = {};
+    ESP_LOGI(TAG, "httpd_query_key_value() >> key=enabled capacity=%u", unsigned(sizeof(onText)));
+    const esp_err_t onResult = httpd_query_key_value(body, "enabled", onText, sizeof(onText));
+    ESP_LOGI(TAG, "httpd_query_key_value() << result=%s value=%s", esp_err_to_name(onResult),
+             onResult == ESP_OK ? onText : "");
+    ESP_LOGI(TAG, "httpd_query_key_value() >> key=brightness capacity=%u", unsigned(sizeof(levelText)));
+    const esp_err_t levelResult = httpd_query_key_value(body, "brightness", levelText, sizeof(levelText));
+    ESP_LOGI(TAG, "httpd_query_key_value() << result=%s value=%s", esp_err_to_name(levelResult),
+             levelResult == ESP_OK ? levelText : "");
+    if (onResult == ESP_OK)
+    {
+        if (std::strcmp(onText, "0") == 0) enabled = false;
+        else if (std::strcmp(onText, "1") == 0) enabled = true;
+        else result = ESP_ERR_INVALID_ARG;
+    }
+    else if (onResult != ESP_ERR_NOT_FOUND) result = ESP_ERR_INVALID_ARG;
+    if (levelResult == ESP_OK)
+    {
+        // 限定非空十进制整数，拒绝负数、小数及尾随字符；字段长度限制保证转换不会溢出。
+        if (levelText[0] == '\0' || std::strspn(levelText, "0123456789") != std::strlen(levelText))
+            result = ESP_ERR_INVALID_ARG;
+        else
+        {
+            brightness = std::atoi(levelText);
+            if (brightness > 100) result = ESP_ERR_INVALID_ARG;
+        }
+    }
+    else if (levelResult != ESP_ERR_NOT_FOUND) result = ESP_ERR_INVALID_ARG;
+    if (onResult == ESP_ERR_NOT_FOUND && levelResult == ESP_ERR_NOT_FOUND) result = ESP_ERR_INVALID_ARG;
+    if (result != ESP_OK)
     {
         ESP_LOGW(TAG, "setLed() << result=INVALID_ARGUMENT");
-        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected enabled=0 or enabled=1");
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Expected enabled=0/1 and/or brightness=0..100");
     }
     if (!m_ledReady.load()) result = ESP_ERR_INVALID_STATE;
     if (result == ESP_OK)
     {
-        const bool enabled = body[8] == '1';
-        result = writeLed(enabled);
+        result = writeLed(enabled, brightness);
         m_ledFault.store(result);
-        if (result == ESP_OK) m_ledOn.store(enabled);
+        if (result == ESP_OK)
+        {
+            // 只有 RMT 发送完成才发布整组设置；这些状态只确认软件输出，不代表光学反馈。
+            m_ledBrightness.store(brightness);
+            m_ledOn.store(enabled);
+        }
         else m_ledReady.store(false);
     }
     if (result != ESP_OK)
     {
         ESP_LOGW(TAG, "setLed() << result=%s", esp_err_to_name(result));
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash LED unavailable");
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Board LED unavailable");
     }
-    char json[96];
-    std::snprintf(json, sizeof(json), "{\"led_ready\":true,\"led_on\":%s,\"led_fault\":0}", m_ledOn.load() ? "true" : "false");
+    char json[128];
+    std::snprintf(json, sizeof(json), "{\"led_ready\":true,\"led_on\":%s,\"led_brightness\":%d,\"led_fault\":0}",
+                  m_ledOn.load() ? "true" : "false", m_ledBrightness.load());
     httpd_resp_set_type(req, "application/json");
-    ESP_LOGI(TAG, "setLed() << result=ESP_OK enabled=%d", int(m_ledOn.load()));
+    ESP_LOGI(TAG, "setLed() << result=ESP_OK enabled=%d brightness=%d", int(enabled), brightness);
     return httpd_resp_sendstr(req, json);
 }
 
@@ -247,7 +290,7 @@ esp_err_t CameraWeb::initCamera()
     }
 
     camera_config_t config = {};
-    // 相机板内连接按 S3-EYE 候选映射配置；底盘外设使用独立的固定孔位映射。
+    // 相机板内连接已通过 OV3660 取图验证；底盘外设使用独立的固定孔位映射。
     config.pin_pwdn = -1;
     config.pin_reset = -1;
     config.pin_xclk = board::CAM_XCLK;
@@ -264,7 +307,7 @@ esp_err_t CameraWeb::initCamera()
     config.pin_vsync = board::CAM_VSYNC;
     config.pin_href = board::CAM_HREF;
     config.pin_pclk = board::CAM_PCLK;
-    // OV3660 默认使用 20 MHz XCLK，PLL 由组件按分辨率设置，不沿用 OV2640 倍频。
+    // 本板实测 16 MHz 避免 20 MHz 的秒级网络停顿；PLL 由组件按分辨率设置。
     config.xclk_freq_hz = CONFIG_CAMERA_XCLK_FREQ_HZ;
     config.ledc_timer = LEDC_TIMER_0;
     config.ledc_channel = LEDC_CHANNEL_0;
@@ -272,10 +315,10 @@ esp_err_t CameraWeb::initCamera()
     // 按最大支持分辨率分配缓冲，运行时切换分辨率不会超出初始容量。
     config.frame_size = FRAMESIZE_UXGA;
     config.jpeg_quality = 10;
-    // 有空闲缓冲时采集；双缓冲允许下一帧采集与上一帧发送重叠，满后等待归还。
+    // 直接 DMA 写 PSRAM；三缓冲在 TCP 持有一帧时仍可采集，并丢弃积压旧帧降低延迟。
     config.fb_count = m_frameCount;
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+    config.grab_mode = CAMERA_GRAB_LATEST;
     esp_err_t result = esp_camera_init(&config);
     if (result != ESP_OK)
     {
@@ -297,6 +340,17 @@ esp_err_t CameraWeb::initCamera()
         esp_camera_deinit();
         return ESP_FAIL;
     }
+    // 上电先设置传感器翻转，使网页勾选状态与实际图像一致；随后清理旧方向的排队帧。
+    ESP_LOGI(TAG, "sensor set_vflip() >> enabled=1");
+    const int flipped = sensor->set_vflip(sensor, 1);
+    ESP_LOGI(TAG, "sensor set_vflip() << result=%d", flipped);
+    if (flipped != 0)
+    {
+        // 默认方向设置失败时不发布错误的网页状态，也不继续使用未完成配置的相机。
+        ESP_LOGE(TAG, "initCamera() << result=INITIAL_VFLIP_FAILED");
+        esp_camera_deinit();
+        return ESP_FAIL;
+    }
     // 每个缓冲都可能保留初始化 UXGA 阶段的旧帧，逐个丢弃后再开放 HTTP 服务。
     for (int index = 0; index < m_frameCount; ++index)
     {
@@ -312,8 +366,9 @@ esp_err_t CameraWeb::initCamera()
     // 初始化阶段尚无并发请求；先发布快照，再开放网页和运动服务。
     m_size = 2;
     cacheStatus();
-    ESP_LOGI(TAG, "initCamera() << result=OK sensor=OV3660 resolution=640x480 fb_count=%d grab_mode=when_empty cpu_mhz=%d xclk_hz=%d",
-             m_frameCount, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ, CONFIG_CAMERA_XCLK_FREQ_HZ);
+    ESP_LOGI("camera_main", "initCamera() << result=OK sensor=OV3660 resolution=640x480 fb_count=%d grab_mode=latest cpu_mhz=%d xclk_hz=%d direct_psram_dma=%d",
+             m_frameCount, CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ, CONFIG_CAMERA_XCLK_FREQ_HZ,
+             int(esp_camera_get_psram_mode()));
     return ESP_OK;
 }
 
@@ -447,6 +502,7 @@ esp_err_t CameraWeb::recoverCamera()
         return ESP_FAIL;
     }
     cacheStatus();
+    m_cameraResets.fetch_add(1);
     ESP_LOGI(TAG, "recoverCamera() << result=OK");
     return ESP_OK;
 }
@@ -597,7 +653,7 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
         ESP_LOGI(TAG, "esp_timer_stop() >> name=wifi_retry");
         const esp_err_t result = esp_timer_stop(app->m_retryTimer);
         ESP_LOGI(TAG, "esp_timer_stop() << result=%s", esp_err_to_name(result));
-        ESP_LOGI(TAG, "STA connected; open http://" IPSTR "/; AP http://192.168.4.1/", IP2STR(&event->ip_info.ip));
+        ESP_LOGI("camera_main", "STA connected; open http://" IPSTR "/; AP http://192.168.4.1/", IP2STR(&event->ip_info.ip));
         return;
     }
     if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP)
@@ -620,7 +676,7 @@ void CameraWeb::onWifiEvent(void* arg, esp_event_base_t base, int32_t id, void* 
     {
         app->m_apReady.store(true);
         app->m_connected.store(true);
-        ESP_LOGI(TAG, "SoftAP started ssid=%s; open http://192.168.4.1/", CONFIG_CAMERA_AP_SSID);
+        ESP_LOGI("camera_main", "SoftAP started ssid=%s; open http://192.168.4.1/", CONFIG_CAMERA_AP_SSID);
     }
     else if (id == WIFI_EVENT_AP_STOP)
     {
@@ -757,6 +813,8 @@ esp_err_t CameraWeb::startServers()
     config.ctrl_port += 1;
     config.max_uri_handlers = 1;
     config.max_open_sockets = 1;
+    // 仅放宽视频 TCP 的短暂拥塞容忍；运动连接看门期限和超时不变。
+    config.send_wait_timeout = 5;
     const esp_err_t result = httpd_start(&m_stream, &config);
     if (result != ESP_OK)
     {
@@ -1046,7 +1104,7 @@ esp_err_t CameraWeb::sendPerf(httpd_req_t* req)
         {
             // 比较帧缓冲数时完整重建驱动，其他初始化参数使用同一组构建配置。
             const int count = std::atoi(buffers);
-            if (count != 1 && count != 2)
+            if (count < 1 || count > 3)
             {
                 return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid buffer count");
             }
@@ -1410,6 +1468,7 @@ esp_err_t CameraWeb::openMotorSocket(httpd_req_t* req)
         return ESP_FAIL;
     }
     app->m_motorFd = httpd_req_to_sockfd(req);
+    app->m_hasMotionSocket.store(true);
     app->m_motorRxUs = esp_timer_get_time();
     app->m_motorClosing = false;
     app->m_motorSeq = 0;
@@ -1589,6 +1648,7 @@ void CameraWeb::closeMotorSocket(httpd_handle_t server, int socketFd)
     auto& app = CameraWeb::instance();
     if (socketFd == app.m_motorFd)
     {
+        app.m_hasMotionSocket.store(false);
         app.m_motorFd = -1;
         app.m_motorRxUs = 0;
         app.m_motorClosing = false;
@@ -1605,7 +1665,8 @@ void CameraWeb::closeMotorSocket(httpd_handle_t server, int socketFd)
 void CameraWeb::queueMotionCheck(void* arg)
 {
     auto* app = static_cast<CameraWeb*>(arg);
-    if (app->m_checkQueued.exchange(true)) return;
+    // 没有控制连接时无需给运动 HTTP 任务投递空巡检；有连接时仍保持原 500 ms 检查周期。
+    if (!app->m_hasMotionSocket.load() || app->m_checkQueued.exchange(true)) return;
     ESP_LOGI(TAG, "httpd_queue_work() >> service=motion work=checkMotionSocket");
     const esp_err_t result = httpd_queue_work(app->m_motion, checkMotionSocket, app);
     if (result == ESP_OK) ESP_LOGI(TAG, "httpd_queue_work() << result=ESP_OK");
@@ -1748,17 +1809,19 @@ void CameraWeb::updateRuntime()
             "{\"cpu_valid\":%s,\"cpu_mhz\":%u,\"cpu0_pct\":%.1f,\"cpu1_pct\":%.1f,"
             "\"internal_free\":%u,\"psram_free\":%u,\"wifi_mode\":\"%s\",\"rssi_source\":\"%s\",\"rssi_valid\":%s,"
             "\"rssi_dbm\":%d,\"ap_clients\":%d,\"video_Bps\":%.1f,\"frames\":%llu,"
-            "\"capture_ms\":%.3f,\"send_ms\":%.3f,\"window_ms\":%lld,\"jpeg_errors\":%u}",
+            "\"capture_ms\":%.3f,\"send_ms\":%.3f,\"window_ms\":%lld,\"jpeg_errors\":%u,"
+            "\"frame_timeouts\":%u,\"camera_resets\":%u}",
             isCpuValid ? "true" : "false", cpuMhz, busyPct[0], busyPct[1],
             unsigned(internalFree), unsigned(psramFree), wifiMode, rssiSource, isRssiValid ? "true" : "false",
             rssiDbm, apClients, bytesPerSec, static_cast<unsigned long long>(frames),
-            captureMs, sendMs, static_cast<long long>(elapsedUs / 1000), unsigned(m_jpegErrors.load()));
+            captureMs, sendMs, static_cast<long long>(elapsedUs / 1000), unsigned(m_jpegErrors.load()),
+            unsigned(m_frameTimeouts.load()), unsigned(m_cameraResets.load()));
     }
 #if CONFIG_CAMERA_OLED_ENABLED
     // 无网页访问、无视频时也主动采样曝光；相机忙则沿用快照，不等待取帧。
     {
         std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
-        if (lock.owns_lock() && esp_timer_get_time() - m_expReadUs >= 2000000)
+        if (lock.owns_lock() && !m_streaming && esp_timer_get_time() - m_expReadUs >= 2000000)
         {
             cacheStatus();
         }
@@ -1975,7 +2038,7 @@ esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
     {
         // 空闲时也刷新自动曝光；视频取帧占锁时立即使用快照，不让状态请求等待取帧。
         std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
-        if (lock.owns_lock() && esp_timer_get_time() - m_expReadUs >= 2000000)
+        if (lock.owns_lock() && !m_streaming && esp_timer_get_time() - m_expReadUs >= 2000000)
         {
             cacheStatus();
         }
@@ -2005,14 +2068,14 @@ esp_err_t CameraWeb::sendStatus(httpd_req_t* req)
     const esp_ip4_addr_t staIp = {staReady ? m_staIp.load() : 0};
     std::snprintf(json, sizeof(json),
         "%s,\"connected\":%s,\"network\":{\"mode\":\"apsta\",\"ap_ready\":%s,"
-        "\"sta_connected\":%s,\"ap_ip\":\"192.168.4.1\",\"sta_ip\":\"" IPSTR "\"},\"runtime\":%s,\"runtime_age_ms\":%lld,\"video_active\":%s,\"led_ready\":%s,\"led_on\":%s,\"led_fault\":%d,"
+        "\"sta_connected\":%s,\"ap_ip\":\"192.168.4.1\",\"sta_ip\":\"" IPSTR "\"},\"runtime\":%s,\"runtime_age_ms\":%lld,\"video_active\":%s,\"led_ready\":%s,\"led_on\":%s,\"led_brightness\":%d,\"led_fault\":%d,"
         "\"motor\":{\"enabled\":%s,\"ready\":%s,\"moving\":%s,\"fault\":%d,"
         "\"generation\":%lu,\"forward\":%d,\"right\":%d,\"turn\":%d,\"wheels\":[%d,%d,%d,%d]}}",
         cached.data(), (apReady || staReady) ? "true" : "false",
         apReady ? "true" : "false", staReady ? "true" : "false", IP2STR(&staIp),
         runtime[0] == '\0' ? "{}" : runtime.data(), static_cast<long long>(runtimeAgeMs),
         isVideoActive ? "true" : "false",
-        m_ledReady.load() ? "true" : "false", m_ledOn.load() ? "true" : "false", int(m_ledFault.load()),
+        m_ledReady.load() ? "true" : "false", m_ledOn.load() ? "true" : "false", m_ledBrightness.load(), int(m_ledFault.load()),
         motor.enabled ? "true" : "false", motor.ready ? "true" : "false", motor.moving ? "true" : "false",
         motor.fault, static_cast<unsigned long>(motor.generation), motor.forward, motor.right, motor.turn,
         motor.wheels[0], motor.wheels[1], motor.wheels[2], motor.wheels[3]);
@@ -2302,15 +2365,14 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
     unsigned frames = 0;
     // 记录本次连接完整发出的帧数，区分首帧失败和持续传输后的失败。
     unsigned totalFrames = 0;
-    // 单连接内最多恢复两次，避免持续硬件故障导致无限重试。
+    // 连续故障期间最多恢复两次，避免持续硬件故障导致无限重试。
     unsigned badFrames = 0;
     unsigned recoveries = 0;
+    // 连续正常 30 帧后重置恢复预算，允许长连接处理分散的瞬时采集故障。
+    unsigned goodFrames = 0;
     int64_t window = 0;
     int64_t nextFrame = esp_timer_get_time();
     esp_err_t result = ESP_OK;
-    // 每个预览连接复用一个 PSRAM 发送缓冲，合并边界、JPEG 和结尾，减少微小 TCP 写入。
-    std::unique_ptr<uint8_t, decltype(&heap_caps_free)> packet(nullptr, heap_caps_free);
-    size_t capacity = 0;
     while (app->m_connected.load() && epoch == app->m_epoch.load())
     {
         // 使用单调时钟限速；向上取整到 tick，保证发送频率不超过设定上限。
@@ -2354,12 +2416,22 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             ESP_LOGE(TAG, "取帧失败 capture_ms=%lld lock_wait_ms=%lld frame_present=%d",
                      (long long)(captureUs / 1000),
                      (long long)((captureStart - started) / 1000), int(frame != nullptr));
-            result = ESP_FAIL;
-            break;
+            app->m_frameTimeouts.fetch_add(1);
+            holder.reset();
+            goodFrames = 0;
+            // 单次采集超时先执行有界恢复；只有连续故障耗尽预算才结束网络流。
+            if (recoveries >= 2 || app->recoverCamera() != ESP_OK)
+            {
+                result = ESP_FAIL;
+                break;
+            }
+            ++recoveries;
+            continue;
         }
         if (!isValidJpeg(frame))
         {
             app->m_jpegErrors.fetch_add(1);
+            goodFrames = 0;
             ESP_LOGW(TAG, "stream JPEG rejected bytes=%u consecutive=%u", unsigned(frame->len), badFrames + 1);
             holder.reset();
             if (++badFrames >= 3)
@@ -2376,6 +2448,11 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
             continue;
         }
         badFrames = 0;
+        if (++goodFrames >= 30)
+        {
+            recoveries = 0;
+            goodFrames = 30;
+        }
         if (totalFrames == 0)
         {
             // 首帧记录尺寸和 JPEG 起始标志，后续正常帧不逐帧刷屏。
@@ -2390,40 +2467,26 @@ esp_err_t CameraWeb::onStream(httpd_req_t* req)
         const int length = std::snprintf(header, sizeof(header),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n",
             unsigned(jpegBytes));
-        const size_t needed = length + jpegBytes + 2;
-        if (needed > capacity)
-        {
-            // 以 4 KiB 为单位扩容并复用，避免 JPEG 长度小幅变化造成逐帧堆分配。
-            const size_t nextSize = (needed + 4095) & ~size_t(4095);
-            ESP_LOGI(TAG, "heap_caps_realloc() >> bytes=%u caps=PSRAM|8BIT", unsigned(nextSize));
-            auto* resized = static_cast<uint8_t*>(heap_caps_realloc(
-                packet.get(), nextSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-            ESP_LOGI(TAG, "heap_caps_realloc() << success=%d", int(resized != nullptr));
-            if (resized == nullptr)
-            {
-                // 原缓冲在 realloc 失败时仍归 RAII 持有；退出并归还当前相机帧。
-                result = ESP_ERR_NO_MEM;
-                ESP_LOGE(TAG, "onStream() << result=TX_BUFFER_NO_MEMORY bytes=%u", unsigned(nextSize));
-                break;
-            }
-            packet.release();
-            packet.reset(resized);
-            capacity = nextSize;
-        }
-        std::memcpy(packet.get(), header, length);
-        std::memcpy(packet.get() + length, frame->buf, jpegBytes);
-        packet.get()[length + jpegBytes] = '\r';
-        packet.get()[length + jpegBytes + 1] = '\n';
-        // 网络发送只使用独立副本，提前归还采集帧，使两个缓冲能够继续按原节拍采集。
-        holder.reset();
-        // 网络发送不持有传感器锁，慢速客户端不会阻止网页调节参数。
+        // 网络层直接读取 DMA 的 PSRAM 帧，不再将完整 JPEG 复制到第二个 PSRAM 发送包。
+        // 归还前由 holder 独占此帧，三缓冲允许另外两帧继续采集；底层 TCP/Wi-Fi 仍有自身复制。
         const int64_t sendStart = esp_timer_get_time();
-        const char* stage = "frame_packet";
+        const char* stage = "frame_header";
         errno = 0;
-        result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(packet.get()), needed);
+        result = httpd_resp_send_chunk(req, header, length);
+        if (result == ESP_OK)
+        {
+            stage = "jpeg_body";
+            result = httpd_resp_send_chunk(req, reinterpret_cast<const char*>(frame->buf), jpegBytes);
+        }
+        if (result == ESP_OK)
+        {
+            stage = "frame_end";
+            result = httpd_resp_send_chunk(req, "\r\n", 2);
+        }
         // 返回后立即计时并保存 errno，避免首帧日志或状态查询污染发送耗时和错误信息。
         const int sendError = errno;
         const int64_t sentUs = esp_timer_get_time() - sendStart;
+        holder.reset();
         if (result != ESP_OK)
         {
             // 必须先保存 errno，再查询无线状态，避免后续接口覆盖原始发送错误。

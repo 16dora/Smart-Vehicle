@@ -16,19 +16,17 @@ static constexpr gpio_num_t WHEEL_SDA = GPIO_NUM_47;
 static constexpr gpio_num_t ARM_SDA = GPIO_NUM_40;
 // 旧上排第 3 孔 GPIO14，两块 PCA9685 共享的软件 I2C 时钟。
 static constexpr gpio_num_t PCA_SCL = GPIO_NUM_39;
-// 旧下排第 2 孔 U0T；运行时关闭 UART0，改作 OLED 数据输出。
-static constexpr gpio_num_t OLED_MOSI = GPIO_NUM_43;
-// 旧下排第 3 孔 U0R；烧录前仍须断开 OLED 与串口信号线的连接。
-static constexpr gpio_num_t OLED_SCLK = GPIO_NUM_44;
-// 旧上排第 4 孔 GPIO15，连接 OLED 的命令/数据选择脚。
-static constexpr gpio_num_t OLED_DC = GPIO_NUM_38;
+// 新 SH1106 的 I2C 数据线，接上排第 1 孔；MicroSD 保持禁用。
+static constexpr gpio_num_t OLED_SDA = GPIO_NUM_41;
+// 新 SH1106 的 I2C 时钟线，接上排第 6 孔；GPIO43/44 留给 UART0。
+static constexpr gpio_num_t OLED_SCL = GPIO_NUM_14;
 // 旧下排第 4 孔 VCC 在新板变为 GPIO19；固定为输入，该孔不能继续接电源。
 static constexpr gpio_num_t SOCKET_OLD_VCC = GPIO_NUM_19;
 // 旧下排第 5 孔 GND 在新板变为 GPIO20；允许保留地线，但禁用原生 USB 并保持输入。
 static constexpr gpio_num_t SOCKET_OLD_GND = GPIO_NUM_20;
 // 新板载 WS2812 的数据脚；通过 RMT 输出白色，不能按旧 GPIO4 普通灯驱动。
 static constexpr gpio_num_t RGB_LED = GPIO_NUM_48;
-// 相机 XCLK 候选板型沿用 ESP32-S3-EYE 的布线，尚待实机取图确认。
+// 相机 XCLK 使用 ESP32-S3-EYE 布线，已通过 OV3660 持续取图验证。
 static constexpr int CAM_XCLK = 15;
 // 相机 SCCB 数据脚，与 PCA9685 的软件 I2C 相互独立。
 static constexpr int CAM_SDA = 4;

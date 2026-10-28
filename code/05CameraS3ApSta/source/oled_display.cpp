@@ -4,115 +4,109 @@
 #include <cstdio>
 #include "esp_log.h"
 #if CONFIG_CAMERA_OLED_ENABLED
-#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#if !CONFIG_ESP_CONSOLE_NONE
-#error "OLED UART0 pin reuse requires CONFIG_ESP_CONSOLE_NONE"
-#endif
 #endif
 
 // 显示驱动专用日志标签，不再混入相机服务的日志。
 static constexpr char TAG[] = "oled_display";
 
 #if CONFIG_CAMERA_OLED_ENABLED
-// 输入：命令/数据标志及字节数组；输出：SDK 结果；作用：OLED 只写，CS 由硬件接地。
+// 输入：命令/数据标志及字节数组；输出：SDK 结果；作用：同步发送 SH1106 I2C 控制字节和内容。
 esp_err_t OledDisplay::write(bool isData, const uint8_t* bytes, size_t count)
 {
-    ESP_LOGI(TAG, "gpio_set_level() >> gpio=38 level=%d", int(isData));
-    esp_err_t result = gpio_set_level(board::OLED_DC, isData ? 1 : 0);
-    ESP_LOGI(TAG, "gpio_set_level() << result=%s", esp_err_to_name(result));
-    if (result != ESP_OK)
-    {
-        // 命令/数据选择失败时不能继续发送，以免破坏控制寄存器。
-        return result;
-    }
-    // 沿用 64 字节分块；CS 接地，分块之间保持 D/C 不变。
+    if (m_device == nullptr) return ESP_ERR_INVALID_STATE;
+    // 分块控制栈内存占用；每次同步传输完成才复用缓冲，失败即结束本帧，不循环重试。
     for (size_t offset = 0; offset < count; offset += 64)
     {
         const size_t length = std::min(size_t{64}, count - offset);
-        spi_transaction_t transfer{};
-        transfer.length = length * 8;
-        transfer.tx_buffer = bytes + offset;
-        ESP_LOGI(TAG, "spi_device_polling_transmit() >> data=%d offset=%u bytes=%u",
-                 int(isData), unsigned(offset), unsigned(length));
-        result = spi_device_polling_transmit(m_device, &transfer);
-        ESP_LOGI(TAG, "spi_device_polling_transmit() << result=%s", esp_err_to_name(result));
-        if (result != ESP_OK)
-        {
-            // 中途失败停止后续分块，下一刷新重新指定地址并发送完整显存。
-            return result;
-        }
+        uint8_t packet[65];
+        packet[0] = isData ? 0x40 : 0x00;
+        std::copy_n(bytes + offset, length, packet + 1);
+        ESP_LOGI(TAG, "i2c_master_transmit() >> data=%d offset=%u bytes=%u timeout_ms=100",
+                 int(isData), unsigned(offset), unsigned(length + 1));
+        const esp_err_t result = i2c_master_transmit(m_device, packet, length + 1, 100);
+        ESP_LOGI(TAG, "i2c_master_transmit() << result=%s", esp_err_to_name(result));
+        if (result != ESP_OK) return result;
     }
-    return result;
+    return ESP_OK;
 }
 
-// 输入：无；输出：初始化结果；作用：使用板载 RC 复位与双电源初始化 SSD1306。
+// 输入：无；输出：初始化结果；作用：使用独立 I2C0 探测并初始化 SH1106 128×64 屏幕。
 esp_err_t OledDisplay::start()
 {
-    ESP_LOGI(TAG, "start() >>");
-    gpio_config_t pins{};
-    pins.pin_bit_mask = 1ULL << board::OLED_DC;
-    pins.mode = GPIO_MODE_OUTPUT;
-    ESP_LOGI(TAG, "gpio_config() >> mask=%llu mode=output pull=none interrupt=disabled", pins.pin_bit_mask);
-    esp_err_t result = gpio_config(&pins);
-    ESP_LOGI(TAG, "gpio_config() << result=%s", esp_err_to_name(result));
+    ESP_LOGI(TAG, "start() >> controller=SH1106 sda=%d scl=%d", int(board::OLED_SDA), int(board::OLED_SCL));
+    i2c_master_bus_config_t bus{};
+    bus.i2c_port = I2C_NUM_0;
+    bus.sda_io_num = board::OLED_SDA;
+    bus.scl_io_num = board::OLED_SCL;
+    bus.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus.glitch_ignore_cnt = 7;
+    bus.flags.enable_internal_pullup = true;
+    ESP_LOGI(TAG, "i2c_new_master_bus() >> port=0 sda=%d scl=%d glitch=7 pullup=1",
+             int(board::OLED_SDA), int(board::OLED_SCL));
+    esp_err_t result = i2c_new_master_bus(&bus, &m_bus);
+    ESP_LOGI(TAG, "i2c_new_master_bus() << result=%s", esp_err_to_name(result));
     if (result != ESP_OK)
     {
         ESP_LOGW(TAG, "start() << result=%s", esp_err_to_name(result));
         return result;
     }
-    spi_bus_config_t bus{};
-    bus.mosi_io_num = board::OLED_MOSI;
-    bus.miso_io_num = -1;
-    bus.sclk_io_num = board::OLED_SCLK;
-    bus.quadwp_io_num = -1;
-    bus.quadhd_io_num = -1;
-    bus.max_transfer_sz = 64;
-    // 低频状态屏不使用 DMA，显存可以保持在主任务栈中。
-    ESP_LOGI(TAG, "spi_bus_initialize() >> host=SPI2 mosi=43 miso=-1 sclk=44 wp=-1 hd=-1 max=64 dma=disabled");
-    result = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED);
-    ESP_LOGI(TAG, "spi_bus_initialize() << result=%s", esp_err_to_name(result));
-    if (result != ESP_OK)
+    // 四针模块无外部复位线，等待供电稳定；只探测 SH1106 的两个常用地址，避免扫描其他硬件。
+    vTaskDelay(pdMS_TO_TICKS(100));
+    uint8_t address = 0x3c;
+    for (; address <= 0x3d; ++address)
     {
-        ESP_LOGW(TAG, "start() << result=%s", esp_err_to_name(result));
-        return result;
+        ESP_LOGI(TAG, "i2c_master_probe() >> address=0x%02x timeout_ms=50", address);
+        result = i2c_master_probe(m_bus, address, 50);
+        ESP_LOGI(TAG, "i2c_master_probe() << result=%s", esp_err_to_name(result));
+        // 地址未应答可试下一地址；总线超时等错误不继续投递操作。
+        if (result != ESP_ERR_NOT_FOUND) break;
     }
-    spi_device_interface_config_t device{};
-    device.clock_speed_hz = 1000000;
-    device.mode = 0;
-    device.spics_io_num = -1;
-    device.queue_size = 1;
-    ESP_LOGI(TAG, "spi_bus_add_device() >> host=SPI2 hz=1000000 mode=0 cs=-1 queue=1");
-    result = spi_bus_add_device(SPI2_HOST, &device, &m_device);
-    ESP_LOGI(TAG, "spi_bus_add_device() << result=%s", esp_err_to_name(result));
     if (result == ESP_OK)
     {
-        // 等待板载 RC 复位和双电源稳定；外部 5V 接 VCC，关闭内部升压泵。
-        vTaskDelay(pdMS_TO_TICKS(100));
+        i2c_device_config_t device{};
+        device.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+        device.device_address = address;
+        device.scl_speed_hz = 100000;
+        ESP_LOGI(TAG, "i2c_master_bus_add_device() >> address=0x%02x hz=100000", address);
+        result = i2c_master_bus_add_device(m_bus, &device, &m_device);
+        ESP_LOGI(TAG, "i2c_master_bus_add_device() << result=%s", esp_err_to_name(result));
+    }
+    if (result == ESP_OK)
+    {
+        // SH1106 启用内部 DC/DC，使用 64 行扫描；不再使用旧 SSD1306 的水平寻址或外部 5V 配置。
         const uint8_t commands[] = {0xae, 0xd5, 0x80, 0xa8, 0x3f, 0xd3, 0x00,
-            0x40, 0x8d, 0x10, 0x20, 0x00, 0xa1, 0xc8, 0xda, 0x12,
-            0x81, 0x7f, 0xd9, 0x22, 0xdb, 0x20, 0xa4, 0xa6};
+            0x40, 0xad, 0x8b, 0xa1, 0xc8, 0xda, 0x12,
+            0x81, 0x7f, 0xd9, 0x1f, 0xdb, 0x40, 0xa4, 0xa6};
         result = write(false, commands, sizeof(commands));
+        if (result == ESP_OK)
+        {
+            // 等待升压稳定后清空显存再点亮，避免上电显示随机内容。
+            vTaskDelay(pdMS_TO_TICKS(100));
+            result = update({});
+        }
     }
     if (result != ESP_OK)
     {
-        // 初始化未完成时释放已申请资源，可选硬件失败不影响相机。
+        // 屏幕缺失或首帧失败时释放 I2C0；可选 OLED 失败不阻止后续相机和网络启动。
         if (m_device != nullptr)
         {
-            ESP_LOGI(TAG, "spi_bus_remove_device() >> oled");
-            const esp_err_t removed = spi_bus_remove_device(m_device);
-            ESP_LOGI(TAG, "spi_bus_remove_device() << result=%s", esp_err_to_name(removed));
+            ESP_LOGI(TAG, "i2c_master_bus_rm_device() >> oled");
+            const esp_err_t removed = i2c_master_bus_rm_device(m_device);
+            ESP_LOGI(TAG, "i2c_master_bus_rm_device() << result=%s", esp_err_to_name(removed));
             m_device = nullptr;
         }
-        ESP_LOGI(TAG, "spi_bus_free() >> host=SPI2");
-        const esp_err_t freed = spi_bus_free(SPI2_HOST);
-        ESP_LOGI(TAG, "spi_bus_free() << result=%s", esp_err_to_name(freed));
+        ESP_LOGI(TAG, "i2c_del_master_bus() >> port=0");
+        const esp_err_t freed = i2c_del_master_bus(m_bus);
+        ESP_LOGI(TAG, "i2c_del_master_bus() << result=%s", esp_err_to_name(freed));
+        m_bus = nullptr;
         ESP_LOGW(TAG, "start() << result=%s", esp_err_to_name(result));
         return result;
     }
-    update({});
-    ESP_LOGI(TAG, "start() << result=OK");
+    ESP_LOGI("camera_main", "OLED SH1106 ready address=0x%02x sda=%d scl=%d hz=100000",
+             address, int(board::OLED_SDA), int(board::OLED_SCL));
+    ESP_LOGI(TAG, "start() << result=OK address=0x%02x", address);
     return ESP_OK;
 }
 
@@ -176,12 +170,12 @@ void OledDisplay::drawText(std::array<uint8_t, 1024>& frame, int page, const cha
 }
 
 // 输入：当前 CPU 窗口；输出：无；作用：使用快照刷新 OLED，无效或过期曝光显示 --。
-void OledDisplay::update(const OledState& state)
+esp_err_t OledDisplay::update(const OledState& state)
 {
     if (m_device == nullptr)
     {
-        // 配置关闭或初始化失败时不发送数据。
-        return;
+        // 初始化失败时不发送数据，由主任务维持正常的低频采样。
+        return ESP_ERR_INVALID_STATE;
     }
     const double exposureMs = state.exposureMs;
     const bool isExpValid = state.isExpValid;
@@ -213,12 +207,13 @@ void OledDisplay::update(const OledState& state)
     }
     drawText(frame, 4, line);
     drawText(frame, 6, isExpValid ? (isAuto ? "AEC: ON" : "AEC: OFF") : "AEC: --");
-    const uint8_t address[] = {0x21, 0x00, 0x7f, 0x22, 0x00, 0x07};
-    esp_err_t result = write(false, address, sizeof(address));
-    if (result == ESP_OK)
+    esp_err_t result = ESP_OK;
+    // SH1106 显存为 132 列，常见 128 列面板从第 2 列开始；每页显式定位，不能沿用 SSD1306 寻址。
+    for (int page = 0; page < 8 && result == ESP_OK; ++page)
     {
-        // 每两秒只发送一帧；传输失败不立即循环重试，下一采样周期重画完整显存。
-        result = write(true, frame.data(), frame.size());
+        const uint8_t address[] = {static_cast<uint8_t>(0xb0 + page), 0x02, 0x10};
+        result = write(false, address, sizeof(address));
+        if (result == ESP_OK) result = write(true, frame.data() + page * 128, 128);
     }
     if (result == ESP_OK)
     {
@@ -229,9 +224,10 @@ void OledDisplay::update(const OledState& state)
     {
         ESP_LOGW(TAG, "update() << result=%s", esp_err_to_name(result));
     }
+    return result;
 }
 #else
-// 输入：无；输出：成功；作用：禁用构建不访问 GPIO 或 SPI。
+// 输入：无；输出：成功；作用：禁用构建不访问 GPIO 或 I2C。
 esp_err_t OledDisplay::start()
 {
     ESP_LOGI(TAG, "start() >> enabled=0");
@@ -240,8 +236,9 @@ esp_err_t OledDisplay::start()
 }
 
 // 输入：显示快照；输出：无；作用：禁用构建保持空操作。
-void OledDisplay::update(const OledState& state)
+esp_err_t OledDisplay::update(const OledState& state)
 {
     (void)state;
+    return ESP_OK;
 }
 #endif

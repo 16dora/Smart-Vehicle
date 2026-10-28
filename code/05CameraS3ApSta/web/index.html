@@ -89,6 +89,11 @@
         <button id="stop" disabled>停止预览</button>
         <a class="button" href="/capture" target="_blank" rel="noopener">查看单张照片</a>
         <button type="button" id="ledToggle" aria-pressed="false" disabled>打开板载灯</button>
+        <div class="field" style="width:180px;margin:0">
+          <label for="ledBrightness">板载灯亮度 <output id="ledBrightnessValue">--</output></label>
+          <input id="ledBrightness" type="range" min="0" max="100" step="1" value="13" disabled>
+          <div class="muted">关灯时可预设亮度，0% 不发光</div>
+        </div>
         <nav class="tab-list" role="tablist" aria-label="控制台页面">
           <button type="button" id="tabControl" role="tab" aria-controls="controlPanel" aria-selected="true" tabindex="0">Tab1 · 控制</button>
           <button type="button" id="tabImage" role="tab" aria-controls="imagePanel" aria-selected="false" tabindex="-1">Tab2 · 图像设置</button>
@@ -175,7 +180,7 @@
         <div class="field"><label for="contrast">对比度 <output id="contrastValue">0</output></label><input id="contrast" data-setting type="range" min="-2" max="2" value="0"></div>
         <div class="field"><label for="saturation">饱和度 <output id="saturationValue">0</output></label><input id="saturation" data-setting type="range" min="-2" max="2" value="0"></div>
         <label class="check"><input id="hmirror" data-setting type="checkbox">水平镜像</label>
-        <label class="check"><input id="vflip" data-setting type="checkbox">垂直翻转</label>
+        <label class="check"><input id="vflip" data-setting type="checkbox" checked>垂直翻转</label>
       </fieldset>
     </section>
         </div>
@@ -216,6 +221,10 @@ let saving = false;
 let polling = false;
 // 本页是否主动打开了视频，设备可能还有另一个浏览器连接。
 let previewing = false;
+// 视频连接代次独立于运动控制；重连只重新打开图片流，不恢复车辆/机械臂操作。
+let videoRetryTimer = null;
+let videoRetryCount = 0;
+let videoProgressMs = 0;
 // 输入尚未提交时，状态轮询仍更新实测显示，但不能覆盖用户正在调节的手动值。
 let exposureEditing = false;
 // 每次设置提交递增，丢弃该设置之前发起的状态请求，避免旧曝光模式覆盖新设置。
@@ -294,6 +303,9 @@ let armStepEpoch = 0;
 let ledKnown = null;
 let ledBusy = false;
 let ledVersion = 0;
+// 已确认的亮度预设与正在拖动的输入分离，轮询不会覆盖未松手的滑块。
+let ledLevel = 13;
+let ledEditing = false;
 
 
 // 输入：文本和错误标识；输出：无；作用：集中显示操作结果。
@@ -468,6 +480,13 @@ async function pollStatus() {
     if (saving || version !== settingsVersion) return;
     updateRuntime(state);
     updateExposure(state);
+    if (previewing && videoRetryTimer === null) {
+      // 后端连续八秒无完整帧时重建图片连接；不通过历史 FPS 冒充浏览器已显示画面。
+      if (state.streaming && state.runtime && state.runtime.frames > 0) {
+        videoProgressMs = performance.now();
+        videoRetryCount = 0;
+      } else if (performance.now() - videoProgressMs > 8000) streamFailed();
+    }
     if (!ledBusy && ledReadVersion === ledVersion) updateLed(state);
     setOverlayValue('actualFps', Number.isFinite(state.actual_fps) ? state.actual_fps.toFixed(1) : '--',
       Number.isFinite(state.actual_fps) && state.actual_fps < 5);
@@ -533,24 +552,41 @@ async function changeSetting(event) {
   }
 }
 
-// 输入：无；输出：无；作用：用当前主机的 81 端口打开 MJPEG 连接。
-function startPreview() {
-  previewing = true;
+// 输入：无；输出：无；作用：为当前预览建立新连接，使用递增退避避免故障时频繁建连。
+function openVideoStream() {
+  if (!previewing || pageLeaving) return;
+  videoRetryTimer = null;
+  if (document.hidden) {
+    videoRetryTimer = setTimeout(openVideoStream, 2000);
+    return;
+  }
   const stream = new URL(location.href);
   stream.port = '81';
   stream.pathname = '/stream';
   stream.search = '?t=' + Date.now();
+  videoProgressMs = performance.now();
   video.src = stream.href;
   video.hidden = false;
   document.getElementById('placeholder').hidden = true;
+}
+
+// 输入：无；输出：无；作用：明确开始预览，重置视频重试状态，不修改运动连接。
+function startPreview() {
+  previewing = true;
+  clearTimeout(videoRetryTimer);
+  videoRetryTimer = null;
+  videoRetryCount = 0;
+  openVideoStream();
   startButton.disabled = true;
   stopButton.disabled = false;
   showMessage('正在接收视频…');
 }
 
-// 输入：无；输出：无；作用：先关闭本页接收，再通知服务器结束旧连接。
+// 输入：无；输出：无；作用：先作废本页重试，再通知服务器结束旧连接。
 async function stopPreview() {
   previewing = false;
+  clearTimeout(videoRetryTimer);
+  videoRetryTimer = null;
   video.removeAttribute('src');
   video.hidden = true;
   document.getElementById('placeholder').hidden = false;
@@ -564,13 +600,13 @@ async function stopPreview() {
   startButton.disabled = !initialized;
 }
 
-// 输入：无；输出：无；作用：视频断线后允许重新打开，不无限自动创建连接。
+// 输入：无；输出：无；作用：连接失败后仅重连视频；用户停止、离页或已有定时器时不再建连。
 function streamFailed() {
-  if (!previewing) return;
-  previewing = false;
-  startButton.disabled = !initialized;
-  stopButton.disabled = true;
-  showMessage('视频连接已结束，请点击开始预览重试。', true);
+  if (!previewing || pageLeaving || videoRetryTimer !== null) return;
+  video.removeAttribute('src');
+  const delay = Math.min(5000, 500 * Math.pow(2, Math.min(videoRetryCount++, 4)));
+  videoRetryTimer = setTimeout(openVideoStream, delay);
+  showMessage('视频连接中断，正在自动重连…', true);
 }
 
 // 输入：电机快照；输出：无；作用：硬件未就绪时禁用运动，并显示驱动故障。
@@ -893,6 +929,10 @@ function leaveDrive() {
   const hadDrive = Boolean(driveButton || driveArmed || waitMode);
   if (motorSocket && motorSocket.readyState === WebSocket.OPEN && motorSocket.bufferedAmount === 0) sendMotorFrame(2);
   pageLeaving = true;
+  // 页面可能进入浏览器缓存；取消视频重试并释放图片连接，避免恢复后遗留失效定时器。
+  clearTimeout(videoRetryTimer);
+  videoRetryTimer = null;
+  video.removeAttribute('src');
   clearControlQueue();
   clearDrive();
   const old = motorSocket;
@@ -905,6 +945,8 @@ function leaveDrive() {
 function resumeMotorPage() {
   if (!pageLeaving) return;
   pageLeaving = false;
+  // 只恢复用户原先开启的预览，车辆仍需重新按下控制按钮才允许动作。
+  if (previewing) openVideoStream();
   reconnectAtMs = 0;
   motorSettings.disabled = true;
   pollMotor();
@@ -1217,30 +1259,69 @@ document.addEventListener('visibilitychange', hideArmStep);
 document.getElementById('armRelease').addEventListener('click', commandArm);
 setInterval(pollArm, 250);
 
-// 输入：确认后的开关状态；输出：无；作用：按钮只显示设备已确认的软件输出状态。
+// 输入：确认后的开关与亮度；输出：无；作用：只发布设备状态，保留正在拖动的输入。
 function updateLed(state) {
   const button = document.getElementById('ledToggle');
-  if (!state || !state.led_ready || typeof state.led_on !== 'boolean') {
-    ledKnown = null; button.disabled = true; button.textContent = '板载灯状态未知'; button.setAttribute('aria-pressed', 'false'); return;
+  const slider = document.getElementById('ledBrightness');
+  const output = document.getElementById('ledBrightnessValue');
+  if (!state || !state.led_ready || typeof state.led_on !== 'boolean' ||
+      !Number.isInteger(state.led_brightness) || state.led_brightness < 0 || state.led_brightness > 100) {
+    ledKnown = null; button.disabled = true; slider.disabled = true;
+    button.textContent = '板载灯状态未知'; button.setAttribute('aria-pressed', 'false'); output.textContent = '--'; return;
   }
-  ledKnown = state.led_on; button.disabled = ledBusy;
+  ledKnown = state.led_on; ledLevel = state.led_brightness;
+  button.disabled = ledBusy; slider.disabled = ledBusy;
   button.textContent = ledKnown ? '关闭板载灯' : '打开板载灯';
   button.setAttribute('aria-pressed', String(ledKnown));
+  if (!ledEditing) {
+    slider.value = String(ledLevel);
+    output.textContent = ledLevel + '%';
+  }
 }
 
-// 输入：点击；输出：无；作用：按绝对开关值设置，不乐观翻转，也不自动重试未知结果。
-async function toggleLed() {
+// 输入：绝对开关与百分数；输出：无；作用：单请求确认整组设置，失败由后续轮询核实，不重发。
+async function setLedState(enabled, brightness) {
   if (ledBusy || ledKnown === null) return;
-  ledBusy = true; ++ledVersion;
-  const button = document.getElementById('ledToggle'); button.disabled = true;
+  ledBusy = true; ledEditing = false; ++ledVersion;
+  document.getElementById('ledToggle').disabled = true;
+  document.getElementById('ledBrightness').disabled = true;
   try {
-    const state = JSON.parse(await request('/led', {method:'POST',body:new URLSearchParams({enabled:ledKnown ? 0 : 1}),timeout:1500}));
+    const body = new URLSearchParams({enabled:enabled ? 1 : 0,brightness:brightness});
+    const state = JSON.parse(await request('/led', {method:'POST',body:body,timeout:1500}));
     ledBusy = false; updateLed(state);
   } catch (error) {
     ledBusy = false; updateLed(null); showMessage('板载灯指令结果未确认，等待重新读取状态。' + error.message, true);
   }
 }
+
+// 输入：点击；输出：无；作用：保留已确认亮度，只改变输出使能；0% 时开启也不发光。
+async function toggleLed() {
+  await setLedState(!ledKnown, ledLevel);
+}
+
+// 输入：滑块移动；输出：无；作用：仅预览百分数，拖动期间不连续发送网络请求。
+function previewLedBrightness() {
+  ledEditing = true;
+  document.getElementById('ledBrightnessValue').textContent = document.getElementById('ledBrightness').value + '%';
+}
+
+// 输入：滑块松手或键盘提交；输出：无；作用：提交亮度，保持当前开关状态，关灯时只改变预设。
+async function changeLedBrightness() {
+  ledEditing = false;
+  const value = Number(document.getElementById('ledBrightness').value);
+  if (!Number.isInteger(value) || value < 0 || value > 100) return;
+  await setLedState(ledKnown, value);
+}
+
+// 输入：失焦；输出：无；作用：拖动被取消时允许下一次状态轮询恢复已确认数值。
+function finishLedEdit() {
+  ledEditing = false;
+}
+
 document.getElementById('ledToggle').addEventListener('click', toggleLed);
+document.getElementById('ledBrightness').addEventListener('input', previewLedBrightness);
+document.getElementById('ledBrightness').addEventListener('change', changeLedBrightness);
+document.getElementById('ledBrightness').addEventListener('blur', finishLedEdit);
 
 </script>
 </body>

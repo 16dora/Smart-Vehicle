@@ -31,7 +31,7 @@ private:
     // 输入：CPU 有效性与忙碌率；输出：无；作用：准备显示快照，锁外调用独立 OLED 驱动。
     void updateOled(bool isCpuValid, const std::array<double, 2>& busyPct);
     OledDisplay m_display; // 主任务独占访问的可选显示驱动，不读取相机状态。
-    // 以下曝光快照由 m_statusMutex 保护，OLED 不在持锁期间发送 SPI。
+    // 以下曝光快照由 m_statusMutex 保护，OLED 不在持锁期间发送 I2C。
     // 最近成功读取的积分时间，单位毫秒。
     double m_oledExpMs = 0;
     // 最近曝光采样的单调微秒时间，用于十秒过期判断。
@@ -45,10 +45,10 @@ private:
     esp_err_t initCamera();
     // 输入：无；输出：结果；作用：配置 GPIO48 的 WS2812，启动默认熄灭。
     esp_err_t initLed();
-    // 输入：开关表单；输出：HTTP 结果；作用：设置补光灯并返回确认后的软件状态。
+    // 输入：开关/亮度表单；输出：HTTP 结果；作用：设置板载灯并返回确认后的软件状态。
     esp_err_t setLed(httpd_req_t* req);
-    // 输入：灯光开关；输出：驱动结果；作用：使用 RMT 同步发送白色或熄灭指令。
-    esp_err_t writeLed(bool enabled);
+    // 输入：开关与 0～100 的亮度百分数；输出：结果；作用：使用 RMT 发送白色或熄灭指令。
+    esp_err_t writeLed(bool enabled, int brightness);
     // 输入：相机帧；输出：结构是否有效；作用：校验原生 JPEG 表、分量和扫描边界。
     static bool isValidJpeg(const camera_fb_t* frame);
     // 输入：无；输出：恢复结果；作用：保留当前图像参数重新设置传感器。
@@ -132,6 +132,8 @@ private:
     std::array<rmt_symbol_word_t, 25> m_ledSymbols{};
     // 最后成功写入的补光灯开关，不表示物理发光反馈。
     std::atomic<bool> m_ledOn{false};
+    // 白光亮度预设，单位百分数；关灯时保留，上电默认 13%，不会自动点亮。
+    std::atomic<int> m_ledBrightness{13};
     // 补光灯初始化或写入错误，用于页面明确显示不可用。
     std::atomic<esp_err_t> m_ledFault{ESP_OK};
     // 保护相机采集、传感器设置及运行统计，网络发送不持有此锁。
@@ -195,6 +197,8 @@ private:
     httpd_handle_t m_motion = nullptr;
     // 以下连接字段仅由 82 端口 HTTP 任务读写，其他线程不访问，关闭时清空。
     int m_motorFd = -1;
+    // HTTP 任务发布是否有控制连接，定时器只读原子快照，不跨线程读取描述符。
+    std::atomic<bool> m_hasMotionSocket{false};
     // 最后有效控制帧或握手的单调时间，单位微秒，仅由运动 HTTP 任务访问。
     int64_t m_motorRxUs = 0;
     // 失联连接已提交关闭，等待关闭回调前拒绝该连接继续执行命令。
@@ -239,4 +243,8 @@ private:
     bool m_streaming = false;
     // 累计被拒绝的损坏 JPEG 数；抓拍和视频任务并发更新，运行状态按快照读取。
     std::atomic<uint32_t> m_jpegErrors{0};
+    // 视频取帧超时累计量，与损坏 JPEG、网络发送失败分开统计。
+    std::atomic<uint32_t> m_frameTimeouts{0};
+    // 成功执行相机有界恢复的累计次数，供持续视频诊断。
+    std::atomic<uint32_t> m_cameraResets{0};
 };

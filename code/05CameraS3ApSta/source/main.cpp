@@ -7,9 +7,21 @@
 #include <vector>
 #endif
 
-// 输入：无；输出：无；作用：启动服务；OLED 固件关闭串口控制台以复用 UART0 引脚。
+// 输入：无；输出：无；作用：集中配置日志级别后启动相机、网络和独立运动服务。
 extern "C" void app_main(void)
 {
+#if !CONFIG_CAMERA_VERBOSE_LOGS
+    // 保留 SDK 调用日志的代码，默认过滤高频 INFO，避免 115200 UART 持有串口锁阻塞视频。
+    const char* tags[] = {"camera_web", "pca9685_bus", "motor_control", "arm_control", "oled_display"};
+    for (const char* tag : tags)
+    {
+        ESP_LOGI("camera_main", "esp_log_level_set() >> tag=%s level=WARN", tag);
+        esp_log_level_set(tag, ESP_LOG_WARN);
+        ESP_LOGI("camera_main", "esp_log_level_set() << result=OK tag=%s", tag);
+    }
+#endif
+    ESP_LOGI("camera_main", "app_main() >> xclk_hz=%d buffers=%d",
+             CONFIG_CAMERA_XCLK_FREQ_HZ, CONFIG_CAMERA_FRAME_BUFFERS);
     const esp_err_t result = CameraWeb::instance().start();
     if (result != ESP_OK)
     {

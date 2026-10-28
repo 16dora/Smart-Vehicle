@@ -1,14 +1,20 @@
 menu "Camera Web Server"
 
     config CAMERA_OLED_ENABLED
-        bool "Enable optional 100ask SSD1306 SPI OLED"
-        depends on ESP_CONSOLE_NONE
+        bool "Enable optional SH1106 128x64 I2C OLED"
+        depends on SCCB_HARDWARE_I2C_PORT1
+        default y
+        help
+            I2C0: SDA=GPIO41, SCL=GPIO14, VCC=3.3V, GND=GND.
+            Probe 0x3C then 0x3D. The camera uses I2C1 independently.
+            Keep microSD disabled. UART0 pins remain available for logging.
+
+    config CAMERA_VERBOSE_LOGS
+        bool "Verbose peripheral SDK logs (reduces video throughput on UART)"
         default n
         help
-            U0R/GPIO44 = SCLK, U0T/GPIO43 = MOSI, GPIO38 = D/C.
-            CS is grounded, MISO is unused. Connect both 3.3V and 5V.
-            UART console must be disabled because SPI reuses UART0 pins.
-            Disconnect the two UART signal wires before serial flashing.
+            Keep INFO SDK calls compiled, but normally show warnings/errors for
+            high-frequency camera and motion modules. Startup URLs remain INFO.
 
     config CAMERA_RUNTIME_STATS
         bool
@@ -21,9 +27,10 @@ menu "Camera Web Server"
     config CAMERA_XCLK_FREQ_HZ
         int "Camera external clock frequency (Hz)"
         range 16000000 20000000
-        default 20000000
+        default 16000000
         help
             OV3660 external clock on GPIO15. The component selects its own PLL.
+            16 MHz avoids severe network stalls measured on this S3-CAM board.
             Project 03 OV2640 clock doubling and DVP register settings do not apply.
 
     config CAMERA_PERF_TEST
@@ -36,10 +43,10 @@ menu "Camera Web Server"
 
     config CAMERA_FRAME_BUFFERS
         int "Camera frame buffer count"
-        range 1 2
-        default 2
+        range 1 3
+        default 3
         help
-            Two buffers allow capture to overlap with JPEG transmission.
+            Three buffers keep DMA capture active while one JPEG is held by TCP.
 
 
 
